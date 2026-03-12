@@ -8,8 +8,9 @@
   var API_LIBRARY = "finance_embeddings";
   var DEFAULTS = {
     rerank: true,
-    model: "mistralai/Mistral-Small-3.2-24B-Instruct-2506-bfloat16",
+    model: "Qwen/Qwen3-VL-235B-A22B-Thinking",
     topK: 10,
+    indexKey: "",
   };
 
   var INJECT_SCRIPT_LOADED = false;
@@ -148,6 +149,7 @@
           previous_messages: context.previous_messages,
           library: API_LIBRARY,
           model: settings.model,
+          index_key: settings.indexKey,
           top_k: settings.topK,
           temperature: 0.3,
           rerank: settings.rerank,

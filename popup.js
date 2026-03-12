@@ -2,9 +2,10 @@
 
 var DEFAULTS = {
   rerank: true,
-  model: "mistralai/Mistral-Small-3.2-24B-Instruct-2506-bfloat16",
+  model: "Qwen/Qwen3-VL-235B-A22B-Thinking",
   topK: 10,
   apiKey: "",
+  indexKey: "",
 };
 
 var rerankToggle = document.getElementById("rerank-toggle");
@@ -12,6 +13,7 @@ var modelSelect = document.getElementById("model-select");
 var topkRange = document.getElementById("topk-range");
 var topkValue = document.getElementById("topk-value");
 var apiKeyInput = document.getElementById("api-key-input");
+var indexKeyInput = document.getElementById("index-key-input");
 
 // Load saved settings
 chrome.storage.local.get(DEFAULTS, function (data) {
@@ -20,6 +22,7 @@ chrome.storage.local.get(DEFAULTS, function (data) {
   topkRange.value = data.topK;
   topkValue.textContent = data.topK;
   apiKeyInput.value = data.apiKey;
+  indexKeyInput.value = data.indexKey;
 });
 
 // Save on change
@@ -36,6 +39,10 @@ topkRange.addEventListener("input", function () {
   chrome.storage.local.set({ topK: parseInt(topkRange.value, 10) });
 });
 
-apiKeyInput.addEventListener("change", function () {
+apiKeyInput.addEventListener("input", function () {
   chrome.storage.local.set({ apiKey: apiKeyInput.value });
+});
+
+indexKeyInput.addEventListener("input", function () {
+  chrome.storage.local.set({ indexKey: indexKeyInput.value });
 });
