@@ -58,4 +58,11 @@
       })
     );
   });
+
+  // Send g_ck CSRF token to content script via DOM attribute (cross-world safe)
+  var gck = window.g_ck;
+  if (gck) {
+    document.documentElement.setAttribute("data-sn-ai-gck", gck);
+    document.dispatchEvent(new CustomEvent("sn-ai-gck"));
+  }
 })();

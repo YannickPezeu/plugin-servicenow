@@ -1,2 +1,4 @@
 .claude/
 INC*.html
+extension-key.pem
+.env

@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>ServiceNow AI Response Generator - Rapport de securite et conformite</title>
+<style>
+  @page { margin: 2cm; }
+  body {
+    font-family: 'Segoe UI', Arial, sans-serif;
+    line-height: 1.6;
+    color: #333;
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 40px 20px;
+  }
+  h1 { color: #c00; border-bottom: 3px solid #c00; padding-bottom: 10px; font-size: 1.8em; }
+  h2 { color: #333; border-bottom: 1px solid #ddd; padding-bottom: 5px; margin-top: 30px; font-size: 1.3em; }
+  h3 { color: #555; margin-top: 20px; font-size: 1.1em; }
+  .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; }
+  .header img { height: 50px; }
+  .badge { display: inline-block; padding: 3px 10px; border-radius: 4px; font-size: 0.85em; font-weight: bold; }
+  .badge-green { background: #e6f4ea; color: #1e7e34; }
+  .badge-blue { background: #e3f2fd; color: #1565c0; }
+  .badge-orange { background: #fff3e0; color: #e65100; }
+  .badge-red { background: #fce4ec; color: #c62828; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 0.9em; }
+  th, td { border: 1px solid #ddd; padding: 8px 12px; text-align: left; }
+  th { background: #f5f5f5; font-weight: 600; }
+  .diagram { background: #f8f9fa; border: 1px solid #e0e0e0; border-radius: 8px; padding: 20px; margin: 15px 0; font-family: monospace; font-size: 0.85em; white-space: pre; line-height: 1.4; }
+  .highlight { background: #fff9c4; padding: 12px 16px; border-left: 4px solid #fbc02d; margin: 15px 0; }
+  .section-security { background: #e8f5e9; padding: 12px 16px; border-left: 4px solid #43a047; margin: 15px 0; }
+  .section-warning { background: #fff3e0; padding: 12px 16px; border-left: 4px solid #e65100; margin: 15px 0; }
+  ul, ol { padding-left: 20px; }
+  li { margin-bottom: 5px; }
+  code { background: #f5f5f5; padding: 2px 6px; border-radius: 3px; font-size: 0.9em; }
+  pre { background: #f8f9fa; border: 1px solid #e0e0e0; border-radius: 8px; padding: 15px; overflow-x: auto; font-size: 0.85em; }
+  .footer { margin-top: 40px; padding-top: 15px; border-top: 1px solid #ddd; font-size: 0.8em; color: #888; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>ServiceNow AI Response Generator</h1>
+    <p style="margin-top:-10px; color:#666;">Rapport de securite et conformite - Equipe Cybersecurite EPFL / DPO</p>
+  </div>
+  <div style="text-align:right; font-size:0.9em; color:#888;">
+    Mars 2026<br>
+    Version 1.0.0
+  </div>
+</div>
+
+<table>
+  <tr><th>Element</th><th>Detail</th></tr>
+  <tr><td>Auteur</td><td>Yannick Pezeu</td></tr>
+  <tr><td>Date</td><td>2 mars 2026</td></tr>
+  <tr><td>Destinataires</td><td>Equipe Cybersecurite EPFL, Delegue a la Protection des Donnees (DPO)</td></tr>
+</table>
+
+<!-- ============================== SECTION 1 ============================== -->
+<h2>1. Presentation du projet</h2>
+
+<h3>1.1 Objectif</h3>
+<p><strong>ServiceNow AI Response Generator</strong> est une extension pour navigateurs Chromium (Chrome, Edge, Opera, Brave, etc.) a usage interne qui assiste les agents du support de l'EPFL dans la redaction de reponses aux tickets ServiceNow. L'extension injecte un bouton "Generer IA" dans l'interface de gestion des tickets, qui interroge un systeme de generation augmentee par recuperation (RAG) heberge a l'EPFL pour proposer un brouillon de reponse contextualise.</p>
+
+<div class="section-security">
+  <strong>L'humain conserve le controle total :</strong> la reponse generee est inseree comme brouillon dans le champ de texte et doit etre relue et validee manuellement avant envoi.
+</div>
+
+<p><strong>Objectifs a long terme :</strong></p>
+<ul>
+  <li>Demontrer la faisabilite et l'efficacite de ce type de reponse automatique pour assister le traitement des tickets ServiceNow</li>
+  <li>Motiver l'integration de ce type de reponse automatique lors de la creation des tickets ServiceNow</li>
+  <li>Permettre une alternative locale, souveraine et peu couteuse au service analogue propose par ServiceNow</li>
+</ul>
+
+<h3>1.2 Perimetre d'utilisation</h3>
+<table>
+  <tr><th>Element</th><th>Detail</th></tr>
+  <tr><td>Utilisateurs cibles</td><td>Tout le personnel EPFL traitant couramment des tickets</td></tr>
+  <tr><td>Distribution</td><td>Installation manuelle (mode developpeur Chrome) dans un premier temps, puis publication sur le Chrome Web Store (acces restreint au personnel EPFL via la visibilite "privee")</td></tr>
+  <tr><td>Environnement</td><td>Navigateurs Chrome, Edge, Opera des postes de travail EPFL</td></tr>
+</table>
+
+<!-- ============================== SECTION 2 ============================== -->
+<h2>2. Architecture technique</h2>
+
+<h3>2.1 Composants de l'extension</h3>
+<table>
+  <tr><th>Fichier</th><th>Role</th><th>Contexte d'execution</th></tr>
+  <tr><td><code>manifest.json</code></td><td>Declaration des permissions et portee</td><td>Configuration Chromium</td></tr>
+  <tr><td><code>content.js</code></td><td>Injection du bouton IA dans le DOM ServiceNow, extraction du contexte du ticket</td><td>Content script (DOM ServiceNow)</td></tr>
+  <tr><td><code>inject.js</code></td><td>Ecriture de la reponse dans le textarea via le scope AngularJS</td><td>Main world (page ServiceNow)</td></tr>
+  <tr><td><code>background.js</code></td><td>Proxy API — transmet les requetes au serveur RAG EPFL</td><td>Service worker (isole)</td></tr>
+  <tr><td><code>popup.html/js</code></td><td>Interface de configuration (cle API, modele, parametres)</td><td>Popup de l'extension</td></tr>
+  <tr><td><code>styles.css</code></td><td>Style du bouton injecte</td><td>CSS injecte</td></tr>
+</table>
+
+<h3>2.2 Flux de donnees</h3>
+
+<div class="diagram">
++------------------+       +------------------+       +---------------------------+
+|  Page ServiceNow |       |  Extension        |       |  Serveur RAG EPFL         |
+|  (support.epfl.ch|       |  (service worker) |       |  lex-chatbot.epfl.ch      |
+|  ou *.service-   |       |                  |       |                           |
+|  now.com)        |       |                  |       |                           |
++--------+---------+       +--------+---------+       +-------------+-------------+
+         |                          |                               |
+         | 1. Clic bouton IA        |                               |
+         | Extraction contexte :    |                               |
+         |  - short_description     |                               |
+         |  - description           |                               |
+         |  - messages precedents   |                               |
+         +------------------------->|                               |
+         |                          | 2. Requete HTTPS POST         |
+         |                          |    X-API-Key: [cle utilisateur]|
+         |                          |    Payload JSON               |
+         |                          +------------------------------>|
+         |                          |                               |
+         |                          |                3. Recherche RAG dans la
+         |                          |                   base de connaissances
+         |                          |                               |
+         |                          |                4. Generation de la reponse
+         |                          |                   par le LLM (infra RCP)
+         |                          |                               |
+         |                          | 5. Reponse JSON               |
+         |                          |    (answer + sources)         |
+         |                          |<------------------------------+
+         | 6. Insertion brouillon   |                               |
+         |    dans textarea         |                               |
+         |<-------------------------+                               |
+         |                          |                               |
+         | 7. Relecture et envoi    |                               |
+         |    MANUEL par l'agent    |                               |
++--------+---------+       +--------+---------+       +-------------+-------------+</div>
+
+<h3>2.3 Donnees transmises au serveur RAG</h3>
+<p>Le payload JSON envoye a l'API contient exclusivement :</p>
+<table>
+  <tr><th>Champ</th><th>Description</th><th>Contenu type</th></tr>
+  <tr><td><code>short_description</code></td><td>Titre court du ticket</td><td>"Probleme VPN campus"</td></tr>
+  <tr><td><code>description</code></td><td>Description detaillee du ticket</td><td>Texte libre du demandeur</td></tr>
+  <tr><td><code>previous_messages</code></td><td>Historique des echanges sur le ticket</td><td>Messages client/agent</td></tr>
+  <tr><td><code>library</code></td><td>Nom de la base de connaissances RAG</td><td><code>"finance_embeddings"</code> (fixe)</td></tr>
+  <tr><td><code>model</code></td><td>Identifiant du modele LLM</td><td>Ex: <code>"Qwen/Qwen3-VL-235B-A22B-Thinking"</code></td></tr>
+  <tr><td><code>index_key</code></td><td>Cle d'acces a l'index de la base de connaissances</td><td>Cle configuree par l'utilisateur</td></tr>
+  <tr><td><code>top_k</code></td><td>Nombre de documents a recuperer</td><td>Entier (1-40, defaut 10)</td></tr>
+  <tr><td><code>temperature</code></td><td>Parametre de creativite du modele</td><td><code>0.3</code> (fixe)</td></tr>
+  <tr><td><code>rerank</code></td><td>Activation du reranking des resultats</td><td>Booleen</td></tr>
+</table>
+
+<div class="section-security">
+  <strong>Donnees NON transmises :</strong> identifiant de l'agent, credentials ServiceNow, cookies de session, numero de ticket, informations systeme.
+</div>
+
+<!-- ============================== SECTION 3 ============================== -->
+<h2>3. Permissions et surface d'attaque</h2>
+
+<h3>3.1 Permissions declarees (Manifest V3)</h3>
+<table>
+  <tr><th>Permission</th><th>Justification</th></tr>
+  <tr><td><code>activeTab</code></td><td>Acces au contenu de l'onglet actif uniquement</td></tr>
+  <tr><td><code>storage</code></td><td>Stockage local des preferences (cle API, modele, parametres)</td></tr>
+</table>
+
+<h3>3.2 Host permissions</h3>
+<table>
+  <tr><th>Domaine</th><th>Justification</th></tr>
+  <tr><td><code>https://lex-chatbot.epfl.ch/*</code></td><td>Unique endpoint API contacte (serveur RAG EPFL)</td></tr>
+</table>
+
+<h3>3.3 Sites d'injection du content script</h3>
+<table>
+  <tr><th>Pattern</th><th>Justification</th></tr>
+  <tr><td><code>*://*.service-now.com/*</code></td><td>Pages ServiceNow (domaine generique SaaS)</td></tr>
+  <tr><td><code>*://support.epfl.ch/*</code></td><td>Instance ServiceNow specifique EPFL</td></tr>
+</table>
+
+<h3>3.4 Evaluation de la surface d'attaque</h3>
+<table>
+  <tr><th>Garantie</th><th>Detail</th></tr>
+  <tr><td><span class="badge badge-green">Permissions minimales</span></td><td>L'extension ne demande pas <code>tabs</code>, <code>webRequest</code>, <code>cookies</code>, <code>history</code> ni aucune permission sensible. Elle n'a pas acces a l'ensemble de la navigation.</td></tr>
+  <tr><td><span class="badge badge-green">Aucune communication externe</span></td><td>Le seul serveur contacte est <code>lex-chatbot.epfl.ch</code>, heberge et administre par l'EPFL.</td></tr>
+  <tr><td><span class="badge badge-green">Pas de code distant</span></td><td>Aucun script externe n'est charge. Tout le code est inclus dans l'extension.</td></tr>
+  <tr><td><span class="badge badge-green">Manifest V3</span></td><td>Architecture d'extension la plus recente et la plus restrictive des navigateurs Chromium (service worker isole, pas de <code>eval()</code>, CSP stricte).</td></tr>
+</table>
+
+<!-- ============================== SECTION 4 ============================== -->
+<h2>4. Stockage des donnees</h2>
+
+<h3>4.1 Donnees stockees localement</h3>
+<table>
+  <tr><th>Donnee</th><th>Mecanisme</th><th>Sensibilite</th><th>Remarques</th></tr>
+  <tr><td>Cle API</td><td><code>chrome.storage.local</code></td><td><span class="badge badge-red">Elevee</span></td><td>Voir section 4.2</td></tr>
+  <tr><td>Index Key</td><td><code>chrome.storage.local</code></td><td><span class="badge badge-red">Elevee</span></td><td>Cle d'acces a l'index RAG, meme traitement que la cle API</td></tr>
+  <tr><td>Modele choisi</td><td><code>chrome.storage.local</code></td><td><span class="badge badge-green">Faible</span></td><td>Identifiant de modele public</td></tr>
+  <tr><td>Top K</td><td><code>chrome.storage.local</code></td><td><span class="badge badge-green">Faible</span></td><td>Parametre numerique</td></tr>
+  <tr><td>Rerank (on/off)</td><td><code>chrome.storage.local</code></td><td><span class="badge badge-green">Faible</span></td><td>Booleen</td></tr>
+</table>
+
+<h3>4.2 Gestion de la cle API</h3>
+<ul>
+  <li>La cle API est stockee via <code>chrome.storage.local</code>, qui est <strong>isolee par extension</strong> et inaccessible aux sites web ou autres extensions.</li>
+  <li>Le stockage n'est <strong>pas chiffre au repos</strong> par Chrome au-dela du chiffrement du profil utilisateur. Ce comportement est identique a celui des gestionnaires de mots de passe integres aux navigateurs.</li>
+  <li>La cle est transmise uniquement en en-tete HTTP (<code>X-API-Key</code>) vers <code>lex-chatbot.epfl.ch</code> via <strong>HTTPS</strong>.</li>
+  <li><strong>Aucune cle n'est codee en dur</strong> dans le code source.</li>
+</ul>
+
+<h3>4.3 Donnees NON stockees</h3>
+<div class="section-security">
+  <strong>Pas de stockage de contenu.</strong> Le contenu des tickets (descriptions, messages) n'est jamais persiste localement. Il est extrait du DOM a chaque clic et transmis en memoire uniquement. Les reponses generees ne sont pas mises en cache.
+</div>
+
+<!-- ============================== SECTION 5 ============================== -->
+<h2>5. Analyse de conformite - Protection des donnees</h2>
+
+<h3>5.1 Donnees personnelles potentiellement traitees</h3>
+<p>Les tickets ServiceNow peuvent contenir des donnees personnelles :</p>
+<table>
+  <tr><th>Categorie</th><th>Exemples</th><th>Probabilite</th></tr>
+  <tr><td>Identifiants</td><td>Noms, prenoms, adresses email EPFL, numeros SCIPER</td><td><span class="badge badge-red">Elevee</span></td></tr>
+  <tr><td>Donnees techniques</td><td>Adresses IP, noms de machines, identifiants reseau</td><td><span class="badge badge-red">Elevee</span></td></tr>
+  <tr><td>Donnees organisationnelles</td><td>Unite, fonction, laboratoire</td><td><span class="badge badge-red">Elevee</span></td></tr>
+  <tr><td>Donnees sensibles (art. 5 nLPD)</td><td>Donnees de sante, opinions</td><td><span class="badge badge-red">Elevee</span></td></tr>
+</table>
+
+<h3>5.2 Base legale du traitement</h3>
+<p>Le traitement s'inscrit dans le cadre de la <strong>mission de support IT de l'EPFL</strong> (interet public, art. 35 nLPD pour les organes federaux). L'extension est un outil d'aide a la redaction qui ne modifie pas la finalite du traitement existant des tickets.</p>
+
+<h3>5.3 Destinataire des donnees</h3>
+<table>
+  <tr><th>Destinataire</th><th>Donnees recues</th><th>Localisation</th></tr>
+  <tr><td>Serveur RAG EPFL</td><td>Contexte du ticket (description + messages)</td><td>Infrastructure EPFL</td></tr>
+  <tr><td>Fournisseur du modele LLM</td><td>RCP</td><td>Infrastructure EPFL</td></tr>
+</table>
+
+<div class="section-security">
+  <strong>Donnees internes EPFL.</strong> Le serveur <code>lex-chatbot.epfl.ch</code> execute les modeles LLM localement sur l'infrastructure RCP de l'EPFL. Il ne transmet pas les donnees a un fournisseur cloud externe.
+</div>
+
+<h3>5.4 Principes de protection des donnees</h3>
+<table>
+  <tr><th>Principe</th><th>Conformite</th><th>Remarques</th></tr>
+  <tr><td>Finalite</td><td><span class="badge badge-green">Conforme</span></td><td>Aide a la redaction de reponses support uniquement</td></tr>
+  <tr><td>Proportionnalite</td><td><span class="badge badge-green">Conforme</span></td><td>Seuls les champs necessaires a la generation sont transmis</td></tr>
+  <tr><td>Minimisation</td><td><span class="badge badge-orange">A ameliorer</span></td><td>Possibilite d'anonymiser les donnees avant envoi. Complexite jugee inutile car le traitement ne quitte pas l'EPFL et n'est pas stocke.</td></tr>
+  <tr><td>Transparence</td><td><span class="badge badge-orange">A completer</span></td><td>Les demandeurs de tickets doivent-ils etre informes de l'usage d'IA ?</td></tr>
+  <tr><td>Securite</td><td><span class="badge badge-green">Conforme</span></td><td>HTTPS, permissions minimales, pas de stockage de contenu</td></tr>
+  <tr><td>Conservation limitee</td><td><span class="badge badge-green">Conforme</span></td><td>Aucune donnee de ticket persistee</td></tr>
+</table>
+
+<!-- ============================== SECTION 6 ============================== -->
+<h2>6. Risques identifies et mesures de mitigation</h2>
+
+<h3>6.1 Matrice des risques</h3>
+<table>
+  <tr><th>#</th><th>Risque</th><th>Impact</th><th>Probabilite</th><th>Mitigation</th></tr>
+  <tr><td>1</td><td>Fuite de la cle API</td><td><span class="badge badge-orange">Moyen</span></td><td><span class="badge badge-green">Faible</span></td><td>Stockage isole par le navigateur, transmission HTTPS uniquement</td></tr>
+  <tr><td>2</td><td>Donnees personnelles dans le payload API</td><td><span class="badge badge-red">Eleve</span></td><td><span class="badge badge-red">Elevee</span></td><td>Aucune donnee personnelle n'est stockee apres traitement. Ni par l'extension, ni par l'API de reponse, ni par RCP pour le LLM. Voir <a href="https://github.com/YannickPezeu/Hierarchical_search">evaluation de securite du serveur</a>.</td></tr>
+  <tr><td>3</td><td>Injection de contenu malveillant via reponse IA</td><td><span class="badge badge-orange">Moyen</span></td><td><span class="badge badge-green">Faible</span></td><td>La reponse est inseree en texte brut (pas de HTML interprete)</td></tr>
+  <tr><td>4</td><td>Reponse IA incorrecte envoyee au client</td><td><span class="badge badge-orange">Moyen</span></td><td><span class="badge badge-orange">Moyenne</span></td><td>Relecture obligatoire par l'agent avant envoi</td></tr>
+  <tr><td>5</td><td>Extension compromise (supply chain)</td><td><span class="badge badge-red">Eleve</span></td><td><span class="badge badge-green">Tres faible</span></td><td>Code source auditable, pas de dependances externes, distribution interne</td></tr>
+  <tr><td>6</td><td>Modification non autorisee de l'UI ServiceNow</td><td><span class="badge badge-green">Faible</span></td><td><span class="badge badge-green">Tres faible</span></td><td>Modifications cote client uniquement, aucun impact serveur</td></tr>
+</table>
+
+<h3>6.2 Mesures de securite en place</h3>
+<table>
+  <tr><th>Garantie</th><th>Detail</th></tr>
+  <tr><td><span class="badge badge-green">Service worker isole</span></td><td>Les appels API sont effectues dans le service worker du navigateur, isole du contexte de la page web.</td></tr>
+  <tr><td><span class="badge badge-green">HTTPS exclusif</span></td><td>Toute communication avec le serveur RAG utilise HTTPS.</td></tr>
+  <tr><td><span class="badge badge-green">Permissions minimales</span></td><td>Seules <code>activeTab</code> et <code>storage</code> sont demandees — aucun acces etendu.</td></tr>
+  <tr><td><span class="badge badge-green">Aucun code distant</span></td><td>Pas de CDN, pas de script externe, pas de <code>eval()</code>.</td></tr>
+  <tr><td><span class="badge badge-green">Manifest V3</span></td><td>Architecture Chromium la plus restrictive disponible.</td></tr>
+  <tr><td><span class="badge badge-green">Aucun stockage de contenu</span></td><td>Les donnees de tickets ne sont jamais persistees.</td></tr>
+  <tr><td><span class="badge badge-green">Timeout des requetes</span></td><td>Les appels API sont annules apres 120 secondes.</td></tr>
+  <tr><td><span class="badge badge-green">Exclusion des donnees sensibles (IA)</span></td><td>Un fichier <code>.claudeignore</code> empeche les assistants IA de developpement (Claude Code, Copilot, etc.) d'acceder aux fichiers sensibles : <code>.env</code>, cles privees (<code>*.pem</code>, <code>*.key</code>), <code>credentials.json</code>, et exports de tickets (<code>INC*.html</code>).</td></tr>
+</table>
+
+<!-- ============================== SECTION 7 ============================== -->
+<h2>7. Conclusion</h2>
+
+<p>L'extension ServiceNow AI Response Generator presente un <strong>profil de risque faible</strong> du point de vue de la securite informatique : permissions minimales, aucune dependance externe, code auditable, et communication exclusivement avec un serveur EPFL.</p>
+
+<div class="section-warning">
+  <strong>Point d'attention principal :</strong> les tickets ServiceNow contiennent potentiellement des donnees personnelles qui sont transmises au serveur RAG. La conformite complete est assuree par le traitement LLM qui reste sur l'infrastructure EPFL sans logs. Pour une evaluation de la securite des donnees dans le serveur generant les reponses, veuillez vous referer au <a href="https://github.com/YannickPezeu/Hierarchical_search">document de securite du serveur</a>.
+</div>
+
+<div class="highlight">
+  <strong>L'outil ne remplace pas le jugement humain</strong> — il propose un brouillon que l'agent revoit et valide avant tout envoi.
+</div>
+
+<!-- ============================== ANNEXES ============================== -->
+<h2>Annexe A - Exemple de payload API</h2>
+
+<pre>{
+  "description": "Je n'arrive pas a me connecter au VPN depuis mon domicile.",
+  "short_description": "Probleme connexion VPN",
+  "previous_messages": [
+    { "sender": "client", "content": "Le VPN ne fonctionne plus depuis ce matin." },
+    { "sender": "agent_support", "content": "Pouvez-vous preciser le message d'erreur ?" }
+  ],
+  "library": "finance_embeddings",
+  "model": "Qwen/Qwen3-VL-235B-A22B-Thinking",
+  "index_key": "[cle d'acces a l'index]",
+  "top_k": 10,
+  "temperature": 0.3,
+  "rerank": true
+}</pre>
+
+<h2>Annexe B - Permissions Chromium detaillees</h2>
+
+<pre>{
+  "permissions": ["activeTab", "storage"],
+  "host_permissions": ["https://lex-chatbot.epfl.ch/*"],
+  "content_scripts.matches": [
+    "*://*.service-now.com/*",
+    "*://support.epfl.ch/*"
+  ]
+}</pre>
+
+<div class="footer">
+  ServiceNow AI Response Generator - Rapport de securite et conformite - Mars 2026 - Confidentiel EPFL
+</div>
+
+</body>
+</html>

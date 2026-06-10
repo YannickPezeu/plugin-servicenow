@@ -1,0 +1,9 @@
+# Secrets and credentials
+.env
+.env.*
+*.pem
+*.key
+credentials.json
+
+# Ticket data exports
+INC*.html

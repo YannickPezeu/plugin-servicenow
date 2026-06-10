@@ -5,24 +5,22 @@
   "use strict";
 
   // --- API Configuration ---
-  var API_LIBRARY = "finance_embeddings";
+  var API_LIBRARY = "large_campus2";
   var DEFAULTS = {
     rerank: true,
-    model: "Qwen/Qwen3-VL-235B-A22B-Thinking",
+    model: "moonshotai/Kimi-K2.6",
     topK: 10,
     indexKey: "",
   };
 
   var INJECT_SCRIPT_LOADED = false;
-  var BUTTONS_INJECTED = new Set();
+  var BOXES_INJECTED = new Set();
+  var PROPOSITION_HOSTS = new Map(); // textareaId -> host element
+  var precomputeTriggered = false;
 
-  // Textarea configurations
+  // Textarea configurations — IDs of the SN textareas we anchor below.
   var TEXTAREA_CONFIGS = [
-    {
-      id: "activity-stream-comments-textarea",
-      scopeField: "activity_field_0.value",
-      label: "Générer IA",
-    },
+    { id: "activity-stream-comments-textarea" },
   ];
 
   function injectMainWorldScript() {
@@ -34,23 +32,6 @@
     };
     (document.head || document.documentElement).appendChild(script);
     INJECT_SCRIPT_LOADED = true;
-  }
-
-  function triggerAiFill(textareaId, scopeField, message) {
-    injectMainWorldScript();
-
-    // Small delay to ensure inject.js is loaded
-    setTimeout(function () {
-      document.dispatchEvent(
-        new CustomEvent("servicenow-ai-fill", {
-          detail: {
-            textareaId: textareaId,
-            scopeField: scopeField,
-            message: message,
-          },
-        })
-      );
-    }, 100);
   }
 
   // --- Extract ticket context from ServiceNow DOM ---
@@ -149,14 +130,13 @@
           previous_messages: context.previous_messages,
           library: API_LIBRARY,
           model: settings.model,
-          index_key: settings.indexKey,
           top_k: settings.topK,
           temperature: 0.3,
           rerank: settings.rerank,
         };
 
         chrome.runtime.sendMessage(
-          { type: "rag-generate", payload: payload },
+          { type: "rag-generate", payload: payload, sysId: getSysIdFromUrl() },
           function (response) {
             if (chrome.runtime.lastError) {
               var errMsg = chrome.runtime.lastError.message || "";
@@ -166,7 +146,7 @@
                 reject(new Error(errMsg));
               }
             } else if (response && response.success) {
-              resolve(response.text);
+              resolve({ text: response.text, sources: response.sources || [] });
             } else {
               reject(new Error(response ? response.error : "No response"));
             }
@@ -176,124 +156,248 @@
     });
   }
 
-  // SVG robot icon
-  var ROBOT_SVG =
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="40" height="40">' +
-    '<rect x="5" y="9" width="14" height="10" rx="2" ry="2"/>' +
-    '<circle cx="9" cy="14" r="1.5" fill="#fff"/>' +
-    '<circle cx="15" cy="14" r="1.5" fill="#fff"/>' +
-    '<rect x="10" y="17" width="4" height="1.5" rx="0.75" fill="#fff"/>' +
-    '<rect x="11" y="4" width="2" height="4" rx="1"/>' +
-    '<circle cx="12" cy="3" r="1.5"/>' +
-    '<rect x="2" y="12" width="2" height="4" rx="1"/>' +
-    '<rect x="20" y="12" width="2" height="4" rx="1"/>' +
-    "</svg>";
+  // --- Save a manually-generated response into the cache (so refresh keeps it) ---
 
-  var SPINNER_SVG =
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" width="40" height="40" class="sn-ai-spinner-svg">' +
-    '<circle cx="12" cy="12" r="9" stroke="rgba(255,255,255,0.3)" stroke-width="3"/>' +
-    '<path d="M12 3a9 9 0 0 1 9 9" stroke="#fff" stroke-width="3" stroke-linecap="round"/>' +
-    "</svg>";
-
-  var WARNING_SVG =
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="40" height="40">' +
-    '<path d="M12 2L1 21h22L12 2z" fill="#fff"/>' +
-    '<path d="M12 5l8.66 15H3.34L12 5z" fill="currentColor"/>' +
-    '<rect x="11" y="10" width="2" height="5" rx="0.5" fill="#fff"/>' +
-    '<circle cx="12" cy="17.5" r="1.2" fill="#fff"/>' +
-    "</svg>";
-
-  function createAiButton(config) {
-    var btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "sn-ai-generate-btn";
-    btn.innerHTML = ROBOT_SVG;
-    btn.title = "Générer une réponse IA pour ce champ";
-
-    btn.addEventListener("click", function (e) {
-      e.preventDefault();
-      e.stopPropagation();
-
-      btn.disabled = true;
-      btn.classList.add("sn-ai-loading");
-      btn.innerHTML = SPINNER_SVG;
-
-      var context = extractTicketContext();
-      console.log("[SN AI Plugin] Ticket context:", context);
-
-      callRagApi(context)
-        .then(function (responseText) {
-          triggerAiFill(config.id, config.scopeField, responseText);
-        })
-        .catch(function (err) {
-          console.error("[SN AI Plugin] API error:", err);
-          if (err.message === CONTEXT_INVALIDATED_MSG) {
-            // Show persistent warning state on button
-            btn.classList.add("sn-ai-disconnected");
-            btn.innerHTML = WARNING_SVG;
-            btn.title = "Plugin deconnecte — rafraichissez la page (F5)";
-            // Don't re-enable normally, keep warning state
-            btn.disabled = false;
-            btn.classList.remove("sn-ai-loading");
-            return;
-          }
-          triggerAiFill(
-            config.id,
-            config.scopeField,
-            "[Erreur IA] Impossible de contacter l'API: " + err.message
-          );
-        })
-        .finally(function () {
-          if (btn.classList.contains("sn-ai-disconnected")) return;
-          // Re-enable button after a short delay to let inject.js finish
-          setTimeout(function () {
-            btn.disabled = false;
-            btn.classList.remove("sn-ai-loading");
-            btn.innerHTML = ROBOT_SVG;
-          }, 500);
-        });
+  function saveResultToCache(sysId, result, shortDescription) {
+    if (!sysId) return;
+    chrome.storage.local.get({ precomputeCache: {} }, function (data) {
+      var cache = data.precomputeCache;
+      var prev = cache[sysId] || {};
+      cache[sysId] = {
+        // Hash is "manual" so the next periodic precompute will re-fetch and
+        // overwrite with the up-to-date hash from background.
+        hash: "manual",
+        response: result.text,
+        sources: result.sources,
+        schemaVersion: 2,
+        timestamp: Date.now(),
+        shortDescription: prev.shortDescription || shortDescription || "",
+      };
+      chrome.storage.local.set({ precomputeCache: cache });
     });
-
-    return btn;
   }
 
-  function injectButtonForTextarea(config) {
-    if (BUTTONS_INJECTED.has(config.id)) return;
+  // --- Inject the autonomous "Proposition IA" box below a textarea ---
+
+  function injectPropositionBoxForTextarea(config) {
+    if (BOXES_INJECTED.has(config.id)) return;
 
     var textarea = document.getElementById(config.id);
     if (!textarea) return;
 
-    // Find the container to attach the button
-    var container = textarea.closest(".sn-stream-textarea-container");
-    if (!container) {
-      container = textarea.parentElement;
+    var container = textarea.closest(".sn-stream-textarea-container") || textarea.parentElement;
+    if (!container || !container.parentElement) return;
+
+    var host = document.createElement("div");
+    host.className = "sn-ai-proposition-host";
+    host.dataset.textareaId = config.id;
+    container.parentElement.insertBefore(host, container.nextSibling);
+    PROPOSITION_HOSTS.set(config.id, host);
+
+    var sysId = getSysIdFromUrl();
+    var inFlight = false;
+
+    function onGenerate() {
+      if (inFlight) return;
+      inFlight = true;
+      window.SnAiPropositionBox.setLoading(host, { onGenerate: onGenerate });
+
+      var context = extractTicketContext();
+      console.log("[SN AI Plugin] Generating proposition, context:", context);
+
+      callRagApi(context)
+        .then(function (result) {
+          inFlight = false;
+          window.SnAiPropositionBox.render(host, result, { onGenerate: onGenerate });
+          saveResultToCache(sysId, result, context.short_description);
+        })
+        .catch(function (err) {
+          inFlight = false;
+          console.error("[SN AI Plugin] API error:", err);
+          var msg = err && err.message ? err.message : String(err);
+          window.SnAiPropositionBox.setError(host, msg, { onGenerate: onGenerate });
+        });
     }
 
-    var btn = createAiButton(config);
+    // Initial state: try cache first, else show empty state
+    if (sysId) {
+      chrome.storage.local.get({ precomputeCache: {} }, function (data) {
+        var cached = data.precomputeCache[sysId];
+        if (cached && cached.response && Array.isArray(cached.sources)) {
+          window.SnAiPropositionBox.render(host, {
+            text: cached.response,
+            sources: cached.sources,
+          }, { onGenerate: onGenerate });
+          console.log("[SN AI Plugin] Proposition rendered from cache for", sysId,
+            "| sources:", cached.sources.length);
+        } else {
+          window.SnAiPropositionBox.setEmpty(host, { onGenerate: onGenerate });
+          if (cached && cached.response && !Array.isArray(cached.sources)) {
+            console.log("[SN AI Plugin] Cache entry is v1 (no sources), showing empty state");
+          }
+        }
+      });
+    } else {
+      window.SnAiPropositionBox.setEmpty(host, { onGenerate: onGenerate });
+    }
 
-    // Wrap the textarea container in a flex row with the button on the left
-    var wrapper = document.createElement("div");
-    wrapper.className = "sn-ai-row-wrapper";
-    container.parentElement.insertBefore(wrapper, container);
-    wrapper.appendChild(btn);
-    wrapper.appendChild(container);
-
-    BUTTONS_INJECTED.add(config.id);
-    console.log("[SN AI Plugin] Button injected for", config.id);
+    BOXES_INJECTED.add(config.id);
+    console.log("[SN AI Plugin] Proposition box injected for", config.id);
   }
 
-  function tryInjectButtons() {
+  function tryInjectPropositionBoxes() {
     TEXTAREA_CONFIGS.forEach(function (config) {
-      injectButtonForTextarea(config);
+      injectPropositionBoxForTextarea(config);
     });
   }
 
+  // --- Precompute: trigger from top frame ---
+
+  function getSysIdFromUrl() {
+    var match = window.location.search.match(/sys_id=([a-f0-9]{32})/);
+    return match ? match[1] : null;
+  }
+
+  var isTopFrame = (window === window.top);
+  var isTicketPage = /incident\.do/.test(window.location.pathname) && getSysIdFromUrl();
+
+  console.log("[SN AI Plugin] Frame info:", {
+    isTopFrame: isTopFrame,
+    isTicketPage: !!isTicketPage,
+    pathname: window.location.pathname,
+    sysId: getSysIdFromUrl(),
+    href: window.location.href.substring(0, 120),
+  });
+
+  // Signal background on every SN page navigation (background handles debounce)
+  if (!isContextInvalidated()) {
+    chrome.runtime.sendMessage({ type: "sn-page-loaded" }, function () {
+      if (chrome.runtime.lastError) { /* ignore */ }
+    });
+  }
+
+  // Top frame: inject script immediately to capture g_ck, add precompute button
+  if (isTopFrame) {
+    injectMainWorldScript();
+
+    function triggerPrecompute() {
+      var gck = document.documentElement.getAttribute("data-sn-ai-gck");
+      if (!gck) {
+        console.warn("[SN AI Plugin] g_ck not found on page");
+        return;
+      }
+
+      if (isContextInvalidated()) {
+        console.warn("[SN AI Plugin] Extension context invalidated");
+        return;
+      }
+
+      chrome.storage.local.get({ assignmentGroup: "" }, function (settings) {
+        if (chrome.runtime.lastError) {
+          console.error("[SN AI Plugin] Storage error:", chrome.runtime.lastError);
+          return;
+        }
+        if (!settings.assignmentGroup) {
+          console.warn("[SN AI Plugin] No assignment group configured");
+          updatePrecomputeButton("no-group");
+          return;
+        }
+
+        console.log("[SN AI Plugin] Precompute triggered for group:", settings.assignmentGroup);
+        updatePrecomputeButton("loading");
+
+        chrome.runtime.sendMessage({
+          type: "precompute-init",
+          gck: gck,
+          origin: window.location.origin,
+          assignmentGroup: settings.assignmentGroup,
+        }, function (response) {
+          if (chrome.runtime.lastError) {
+            console.error("[SN AI Plugin] Message error:", chrome.runtime.lastError);
+            updatePrecomputeButton("error");
+          } else {
+            console.log("[SN AI Plugin] Precompute init response:", response);
+            updatePrecomputeButton("done");
+          }
+        });
+      });
+    }
+
+    // Auto-trigger when g_ck is available
+    document.addEventListener("sn-ai-gck", function () {
+      // Persist g_ck + origin for background periodic precompute
+      var gck = document.documentElement.getAttribute("data-sn-ai-gck");
+      if (gck && !isContextInvalidated()) {
+        chrome.storage.local.set({
+          snGck: gck,
+          snOrigin: window.location.origin,
+          snGckTimestamp: Date.now(),
+        });
+        console.log("[SN AI Plugin] g_ck persisted for background precompute");
+      }
+
+      if (precomputeTriggered) return;
+      precomputeTriggered = true;
+      triggerPrecompute();
+    });
+
+    // Precompute button in top frame
+    function updatePrecomputeButton(state) {
+      var btn = document.getElementById("sn-ai-precompute-btn");
+      if (!btn) return;
+      if (state === "loading") {
+        btn.textContent = "Precompute...";
+        btn.style.backgroundColor = "#f0ad4e";
+        btn.disabled = true;
+      } else if (state === "done") {
+        btn.textContent = "Precompute OK";
+        btn.style.backgroundColor = "#5cb85c";
+        btn.disabled = false;
+      } else if (state === "error") {
+        btn.textContent = "Precompute ERR";
+        btn.style.backgroundColor = "#d9534f";
+        btn.disabled = false;
+      } else if (state === "no-group") {
+        btn.textContent = "Pas de groupe";
+        btn.style.backgroundColor = "#d9534f";
+        btn.disabled = false;
+      }
+    }
+
+    function createPrecomputeButton() {
+      var btn = document.createElement("button");
+      btn.id = "sn-ai-precompute-btn";
+      btn.type = "button";
+      btn.textContent = "Precompute IA";
+      btn.style.cssText =
+        "position:fixed;bottom:20px;right:20px;z-index:99999;" +
+        "padding:10px 16px;border:none;border-radius:6px;" +
+        "background-color:#4a6785;color:#fff;font-size:13px;font-weight:600;" +
+        "cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,0.3);";
+
+      btn.addEventListener("click", function () {
+        precomputeTriggered = false; // allow re-trigger
+        triggerPrecompute();
+      });
+
+      document.body.appendChild(btn);
+    }
+
+    if (document.body) {
+      createPrecomputeButton();
+    } else {
+      document.addEventListener("DOMContentLoaded", createPrecomputeButton);
+    }
+  }
+
+  // --- Proposition box injection (runs in ticket iframes) ---
+
   // Initial attempt
-  tryInjectButtons();
+  tryInjectPropositionBoxes();
 
   // Observe DOM changes (ServiceNow loads content dynamically)
   var observer = new MutationObserver(function () {
-    tryInjectButtons();
+    tryInjectPropositionBoxes();
   });
 
   observer.observe(document.body || document.documentElement, {
@@ -304,9 +408,9 @@
   // Also retry periodically for the first 30 seconds (some SN pages load slowly)
   var retryCount = 0;
   var retryInterval = setInterval(function () {
-    tryInjectButtons();
+    tryInjectPropositionBoxes();
     retryCount++;
-    if (retryCount > 30 || BUTTONS_INJECTED.size >= TEXTAREA_CONFIGS.length) {
+    if (retryCount > 30 || BOXES_INJECTED.size >= TEXTAREA_CONFIGS.length) {
       clearInterval(retryInterval);
     }
   }, 1000);
