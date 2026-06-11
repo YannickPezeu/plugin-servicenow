@@ -137,13 +137,47 @@
     }
     actions.appendChild(generateBtn);
 
+    // Groupe Copier + menu déroulant au survol.
+    // Clic direct sur "Copier" = sans les sources. Survol → choix du mode.
+    var copyGroup = document.createElement("div");
+    copyGroup.className = "sn-ai-copy-group";
+    copyGroup.style.cssText = "position:relative;display:inline-block;";
+
     var copyBtn = document.createElement("button");
     copyBtn.type = "button";
     copyBtn.className = "sn-ai-proposition-copy";
-    copyBtn.title = "Copier la proposition (texte brut)";
-    copyBtn.innerHTML = COPY_SVG + '<span class="sn-ai-btn-label">Copier</span>';
+    copyBtn.title = "Copier — clic : sans les sources · survol : options";
+    copyBtn.innerHTML = COPY_SVG + '<span class="sn-ai-btn-label">Copier ▾</span>';
     copyBtn.disabled = true; // enabled once content exists
-    actions.appendChild(copyBtn);
+    copyGroup.appendChild(copyBtn);
+
+    var copyMenu = document.createElement("div");
+    copyMenu.className = "sn-ai-copy-menu";
+    copyMenu.style.cssText =
+      "display:none;position:absolute;top:100%;right:0;z-index:20;min-width:240px;" +
+      "background:#fff;border:1px solid #d0d7de;border-radius:6px;" +
+      "box-shadow:0 4px 14px rgba(0,0,0,0.18);padding:4px;margin-top:2px;";
+    [["none", "Sans les sources"],
+     ["inline", "Sources inline (URL)"],
+     ["links", "Sources en liens cliquables"]].forEach(function (opt) {
+      var item = document.createElement("button");
+      item.type = "button";
+      item.className = "sn-ai-copy-menu-item";
+      item.dataset.copyMode = opt[0];
+      item.textContent = opt[1];
+      item.style.cssText =
+        "display:block;width:100%;text-align:left;border:none;background:none;" +
+        "padding:6px 10px;font-size:12px;color:#333;cursor:pointer;border-radius:4px;white-space:nowrap;";
+      item.addEventListener("mouseenter", function () { item.style.background = "#eef2f6"; });
+      item.addEventListener("mouseleave", function () { item.style.background = "none"; });
+      copyMenu.appendChild(item);
+    });
+    copyGroup.appendChild(copyMenu);
+
+    copyGroup.addEventListener("mouseenter", function () { if (!copyBtn.disabled) copyMenu.style.display = "block"; });
+    copyGroup.addEventListener("mouseleave", function () { copyMenu.style.display = "none"; });
+
+    actions.appendChild(copyGroup);
 
     header.appendChild(actions);
     box.appendChild(header);
@@ -292,40 +326,80 @@
     refs.generateBtn.innerHTML = ROBOT_SVG + '<span class="sn-ai-btn-label">Régénérer</span>';
     refs.status.textContent = "";
 
-    // Wire up copy button: copy plain-text content of the rendered markdown
+    // Copie : 3 modes (sans sources / sources inline URL / sources en liens cliquables).
     refs.copyBtn.disabled = false;
-    refs.copyBtn.onclick = function () {
+
+    // URL d'une source : http(s) seulement (le backend renvoie "URL not found"
+    // pour les sources sans lien → ignorées) ; + #page=N pour les PDF.
+    function _citeUrl(s) {
+      var u = s && s.source_url ? s.source_url : "";
+      if (!/^https?:\/\//i.test(u)) return "";
+      if (s.file_type === "pdf" && typeof s.page_number === "number" && !/[#&]page=/.test(u)) {
+        u += (u.indexOf("#") !== -1 ? "&" : "#") + "page=" + s.page_number;
+      }
+      return u;
+    }
+
+    function _doCopy(mode) {
       var clone = refs.body.cloneNode(true);
-      // Drop the "Sources" list from the clipboard text
       var sourcesEl = clone.querySelector(".sn-ai-proposition-sources");
       if (sourcesEl) sourcesEl.remove();
 
-      // Remplacer chaque citation [N] par l'URL de la source (+ #page=N pour les
-      // PDF ; rien pour HTML/KB) — plus utile que des numéros dans le texte collé.
-      var srcByNum = {};
-      (refs.body._snSources || []).forEach(function (s) { srcByNum[s.number] = s; });
-      clone.querySelectorAll(".sn-ai-citation").forEach(function (btn) {
-        var s = srcByNum[parseInt(btn.getAttribute("data-source-num"), 10)];
-        var u = s && s.source_url ? s.source_url : "";
-        // Ignorer les sources sans vraie URL (le backend renvoie "URL not found").
-        if (!/^https?:\/\//i.test(u)) {
-          btn.replaceWith(document.createTextNode(""));
-          return;
-        }
-        if (s.file_type === "pdf" && typeof s.page_number === "number" && !/[#&]page=/.test(u)) {
-          u += (u.indexOf("#") !== -1 ? "&" : "#") + "page=" + s.page_number;
-        }
-        btn.replaceWith(document.createTextNode(" (" + u + ")"));
-      });
+      var byNum = {};
+      (refs.body._snSources || []).forEach(function (s) { byNum[s.number] = s; });
+      var cites = clone.querySelectorAll(".sn-ai-citation");
 
-      var plain = (clone.textContent || "").replace(/[ \t]{2,}/g, " ").trim();
-      navigator.clipboard.writeText(plain).then(function () {
+      if (mode === "none") {
+        cites.forEach(function (b) { b.remove(); });
+      } else if (mode === "inline") {
+        cites.forEach(function (b) {
+          var u = _citeUrl(byNum[parseInt(b.getAttribute("data-source-num"), 10)]);
+          b.replaceWith(document.createTextNode(u ? " (" + u + ")" : ""));
+        });
+      } else { // "links" : on garde [N], cliquable (HTML) vers l'URL
+        cites.forEach(function (b) {
+          var num = parseInt(b.getAttribute("data-source-num"), 10);
+          var u = _citeUrl(byNum[num]);
+          if (u) {
+            var a = document.createElement("a");
+            a.href = u;
+            a.textContent = "[" + num + "]";
+            b.replaceWith(a);
+          } else {
+            b.replaceWith(document.createTextNode("[" + num + "]"));
+          }
+        });
+      }
+
+      var done = function () {
         refs.status.textContent = "Copié !";
         setTimeout(function () { refs.status.textContent = ""; }, 1800);
-      }).catch(function (err) {
-        refs.status.textContent = "Échec de la copie : " + err.message;
-      });
-    };
+      };
+      var fail = function (err) {
+        refs.status.textContent = "Échec de la copie : " + ((err && err.message) || err);
+      };
+
+      var text = (clone.textContent || "").replace(/[ \t]{2,}/g, " ").trim();
+      if (mode === "links" && window.ClipboardItem && navigator.clipboard.write) {
+        // text/html → liens cliquables dans l'éditeur HTML ; text/plain → fallback champ simple.
+        navigator.clipboard.write([new ClipboardItem({
+          "text/html": new Blob([clone.innerHTML], { type: "text/html" }),
+          "text/plain": new Blob([text], { type: "text/plain" }),
+        })]).then(done).catch(fail);
+      } else {
+        navigator.clipboard.writeText(text).then(done).catch(fail);
+      }
+    }
+
+    refs.copyBtn.onclick = function () { _doCopy("none"); };
+    refs.box.querySelectorAll(".sn-ai-copy-menu-item").forEach(function (item) {
+      item.onclick = function (e) {
+        e.stopPropagation();
+        _doCopy(item.dataset.copyMode);
+        var m = refs.box.querySelector(".sn-ai-copy-menu");
+        if (m) m.style.display = "none";
+      };
+    });
   }
 
   // --- Streaming (token par token) ---
