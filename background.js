@@ -200,6 +200,122 @@ function fetchTicketComments(origin, gck, sysId) {
   });
 }
 
+// --- Streaming SSE (affichage token par token, chemin à la demande) ---
+// Distinct du précompute (qui reste non-streaming et alimente le cache).
+
+// Enrichit les sources brutes du backend (event SSE "sources") pour matcher la
+// forme attendue par la proposition box (number, cited, champs modal).
+function enrichStreamSources(sources) {
+  var list = Array.isArray(sources) ? sources : [];
+  return list.map(function (src, i) {
+    var num = i + 1;
+    return {
+      number: num,
+      title: (src.title || "Source " + num).replace(/\.md$/, ""),
+      source_url: src.source_url || "",
+      score: typeof src.score === "number" ? src.score : null,
+      snippet: src.snippet || "",
+      precise_content: src.precise_content || src.snippet || "",
+      context_content: src.context_content || src.precise_content || src.snippet || "",
+      header_path: src.header_path || "",
+      page_number: typeof src.page_number === "number" ? src.page_number : null,
+      file_type: src.file_type || "",
+      search_text_start: src.search_text_start || "",
+      search_text_end: src.search_text_end || "",
+      cited: true,
+    };
+  });
+}
+
+// Lit le flux SSE et relaie chunks/sources au port. Événements backend :
+// {type:"metadata"} {type:"sources",sources} {type:"answer_chunk",content} {type:"done"}
+function readSSEStream(body, port) {
+  var reader = body.getReader();
+  var decoder = new TextDecoder();
+  var buffer = "";
+  function pump() {
+    return reader.read().then(function (result) {
+      if (result.done) return;
+      buffer += decoder.decode(result.value, { stream: true });
+      var lines = buffer.split("\n");
+      buffer = lines.pop(); // garde la dernière ligne potentiellement incomplète
+      lines.forEach(function (line) {
+        line = line.trim();
+        if (!line || line.indexOf("data:") !== 0) return;
+        var data = line.substring(5).trim();
+        if (!data) return;
+        try {
+          var ev = JSON.parse(data);
+          if (ev.type === "answer_chunk" && ev.content) {
+            port.postMessage({ type: "chunk", text: ev.content });
+          } else if (ev.type === "sources") {
+            port.postMessage({ type: "sources", sources: enrichStreamSources(ev.sources) });
+          }
+          // metadata ignoré ; done géré par le finally côté handler
+        } catch (e) { /* keepalive / ligne non-JSON : ignorer */ }
+      });
+      return pump();
+    });
+  }
+  return pump();
+}
+
+chrome.runtime.onConnect.addListener(function (port) {
+  if (port.name !== "rag-stream") return;
+
+  port.onMessage.addListener(function (request) {
+    if (request.type !== "rag-generate") return;
+
+    var payload = request.payload || {};
+    payload.stream = true;
+    var sysId = request.sysId;
+
+    chrome.storage.local.get({ apiKey: API_KEY_DEFAULT, snGck: "", snOrigin: "" }, function (settings) {
+      // Historique via l'API record (comme le non-stream), remplace previous_messages.
+      var prep = Promise.resolve();
+      if (sysId && settings.snGck && settings.snOrigin) {
+        prep = fetchTicketComments(settings.snOrigin, settings.snGck, sysId)
+          .then(function (messages) { payload.previous_messages = messages; })
+          .catch(function (e) { console.warn("[SN AI Plugin] stream: lecture comments échouée:", e); });
+      }
+
+      prep.then(function () {
+        buildRagHeaders(settings.apiKey).then(function (headers) {
+          if (!headers["Authorization"] && !settings.apiKey) {
+            port.postMessage({ type: "error", error: "Non connecté : ouvre le popup et connecte-toi (OIDC)." });
+            port.postMessage({ type: "done" });
+            return;
+          }
+          var controller = new AbortController();
+          var timeoutId = setTimeout(function () { controller.abort(); }, 120000);
+
+          fetch(API_URL, {
+            method: "POST",
+            headers: headers,
+            body: JSON.stringify(payload),
+            signal: controller.signal,
+          })
+          .then(function (response) {
+            if (!response.ok) {
+              return response.text().then(function (b) {
+                throw new Error("API error: " + response.status + " - " + b.substring(0, 200));
+              });
+            }
+            return readSSEStream(response.body, port);
+          })
+          .catch(function (err) {
+            port.postMessage({ type: "error", error: err.message });
+          })
+          .finally(function () {
+            clearTimeout(timeoutId);
+            port.postMessage({ type: "done" });
+          });
+        });
+      });
+    });
+  });
+});
+
 // --- Precompute orchestration ---
 
 var precomputeRunning = false;
@@ -218,10 +334,8 @@ function handlePrecomputeInit(request) {
   chrome.storage.local.get(
     { precomputeCache: {}, apiKey: "", rerank: true, model: "moonshotai/Kimi-K2.6", topK: 10, indexKey: "" },
     function (settings) {
-      if (!settings.apiKey) {
-        console.warn("[SN AI Plugin] No API key, skipping precompute");
-        return;
-      }
+      // Plus de gate API key : l'auth passe par le Bearer OIDC (buildRagHeaders).
+      // Si l'utilisateur n'est pas connecté, les appels RAG renverront 401.
 
       fetchIncidents(origin, gck, assignmentGroup)
         .then(function (incidents) {
@@ -380,10 +494,6 @@ function handlePeriodicPrecompute() {
         console.log("[SN AI Plugin] Periodic: no assignment group configured, skipping");
         return;
       }
-      if (!data.apiKey) {
-        console.log("[SN AI Plugin] Periodic: no API key configured, skipping");
-        return;
-      }
       if (Date.now() - data.snGckTimestamp > GCK_MAX_AGE_MS) {
         console.log("[SN AI Plugin] Periodic: g_ck too old (" +
           Math.round((Date.now() - data.snGckTimestamp) / 3600000) + "h), skipping");
@@ -449,10 +559,6 @@ chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
   var payload = request.payload;
 
   chrome.storage.local.get({ apiKey: API_KEY_DEFAULT, snGck: "", snOrigin: "" }, function (settings) {
-    if (!settings.apiKey) {
-      sendResponse({ success: false, error: "Cle API non configuree. Ouvrez le popup du plugin pour la saisir." });
-      return;
-    }
 
     // L'historique de conversation est recupere via l'API ServiceNow (fiable,
     // independant de l'UI classique/moderne) plutot que par scraping DOM cote
@@ -475,6 +581,10 @@ chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
       var timeoutId = setTimeout(function () { controller.abort(); }, 120000);
 
       buildRagHeaders(settings.apiKey).then(function (headers) {
+        // L'auth passe par le Bearer OIDC. La clé API n'est plus requise.
+        if (!headers["Authorization"] && !settings.apiKey) {
+          throw new Error("Non connecté : ouvre le popup et connecte-toi (OIDC), ou configure une clé API.");
+        }
         return fetch(API_URL, {
           method: "POST",
           headers: headers,

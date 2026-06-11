@@ -4,8 +4,6 @@ var DEFAULTS = {
   rerank: true,
   model: "moonshotai/Kimi-K2.6",
   topK: 10,
-  apiKey: "",
-  indexKey: "",
   assignmentGroup: "",
 };
 
@@ -13,8 +11,6 @@ var rerankToggle = document.getElementById("rerank-toggle");
 var modelSelect = document.getElementById("model-select");
 var topkRange = document.getElementById("topk-range");
 var topkValue = document.getElementById("topk-value");
-var apiKeyInput = document.getElementById("api-key-input");
-var indexKeyInput = document.getElementById("index-key-input");
 var assignmentGroupInput = document.getElementById("assignment-group-input");
 var authBtn = document.getElementById("auth-btn");
 var authUser = document.getElementById("auth-user");
@@ -89,8 +85,6 @@ chrome.storage.local.get(DEFAULTS, function (data) {
   modelSelect.value = data.model;
   topkRange.value = data.topK;
   topkValue.textContent = data.topK;
-  apiKeyInput.value = data.apiKey;
-  indexKeyInput.value = data.indexKey;
   assignmentGroupInput.value = data.assignmentGroup;
 });
 
@@ -106,14 +100,6 @@ modelSelect.addEventListener("change", function () {
 topkRange.addEventListener("input", function () {
   topkValue.textContent = topkRange.value;
   chrome.storage.local.set({ topK: parseInt(topkRange.value, 10) });
-});
-
-apiKeyInput.addEventListener("input", function () {
-  chrome.storage.local.set({ apiKey: apiKeyInput.value });
-});
-
-indexKeyInput.addEventListener("input", function () {
-  chrome.storage.local.set({ indexKey: indexKeyInput.value });
 });
 
 assignmentGroupInput.addEventListener("input", function () {

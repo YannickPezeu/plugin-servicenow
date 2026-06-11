@@ -199,24 +199,73 @@
 
     function onGenerate() {
       if (inFlight) return;
+      if (isContextInvalidated()) return;
       inFlight = true;
-      window.SnAiPropositionBox.setLoading(host, { onGenerate: onGenerate });
+      var opts = { onGenerate: onGenerate };
+      window.SnAiPropositionBox.beginStream(host, opts);
 
       var context = extractTicketContext();
-      console.log("[SN AI Plugin] Generating proposition, context:", context);
+      console.log("[SN AI Plugin] Generating proposition (stream), context:", context);
 
-      callRagApi(context)
-        .then(function (result) {
+      chrome.storage.local.get(DEFAULTS, function (settings) {
+        if (chrome.runtime.lastError || isContextInvalidated()) {
           inFlight = false;
-          window.SnAiPropositionBox.render(host, result, { onGenerate: onGenerate });
-          saveResultToCache(sysId, result, context.short_description);
-        })
-        .catch(function (err) {
-          inFlight = false;
-          console.error("[SN AI Plugin] API error:", err);
-          var msg = err && err.message ? err.message : String(err);
-          window.SnAiPropositionBox.setError(host, msg, { onGenerate: onGenerate });
+          window.SnAiPropositionBox.setError(host, CONTEXT_INVALIDATED_MSG, opts);
+          return;
+        }
+
+        var payload = {
+          description: context.description,
+          short_description: context.short_description,
+          previous_messages: context.previous_messages, // écrasé côté backend via l'API journal
+          library: API_LIBRARY,
+          model: settings.model,
+          top_k: settings.topK,
+          temperature: 0.3,
+          rerank: settings.rerank,
+        };
+
+        var port = chrome.runtime.connect({ name: "rag-stream" });
+        var fullText = "";
+        var sources = [];
+        var finished = false;
+
+        port.onMessage.addListener(function (msg) {
+          if (msg.type === "chunk") {
+            fullText += msg.text;
+            window.SnAiPropositionBox.updateStream(host, fullText, sources);
+          } else if (msg.type === "sources") {
+            sources = msg.sources || [];
+            window.SnAiPropositionBox.updateStream(host, fullText, sources);
+          } else if (msg.type === "error") {
+            finished = true;
+            inFlight = false;
+            window.SnAiPropositionBox.setError(host, msg.error, opts);
+            try { port.disconnect(); } catch (e) {}
+          } else if (msg.type === "done") {
+            if (finished) return;
+            finished = true;
+            inFlight = false;
+            if (fullText.trim()) {
+              window.SnAiPropositionBox.finishStream(host, fullText, sources, opts);
+              saveResultToCache(sysId, { text: fullText, sources: sources }, context.short_description);
+            } else {
+              window.SnAiPropositionBox.setEmpty(host, opts);
+            }
+            try { port.disconnect(); } catch (e) {}
+          }
         });
+
+        port.onDisconnect.addListener(function () {
+          if (finished) return;
+          finished = true;
+          inFlight = false;
+          var err = chrome.runtime.lastError;
+          window.SnAiPropositionBox.setError(host, (err && err.message) || "Connexion interrompue.", opts);
+        });
+
+        port.postMessage({ type: "rag-generate", payload: payload, sysId: getSysIdFromUrl() });
+      });
     }
 
     // Initial state: try cache first, else show empty state
@@ -364,30 +413,8 @@
       }
     }
 
-    function createPrecomputeButton() {
-      var btn = document.createElement("button");
-      btn.id = "sn-ai-precompute-btn";
-      btn.type = "button";
-      btn.textContent = "Precompute IA";
-      btn.style.cssText =
-        "position:fixed;bottom:20px;right:20px;z-index:99999;" +
-        "padding:10px 16px;border:none;border-radius:6px;" +
-        "background-color:#4a6785;color:#fff;font-size:13px;font-weight:600;" +
-        "cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,0.3);";
-
-      btn.addEventListener("click", function () {
-        precomputeTriggered = false; // allow re-trigger
-        triggerPrecompute();
-      });
-
-      document.body.appendChild(btn);
-    }
-
-    if (document.body) {
-      createPrecomputeButton();
-    } else {
-      document.addEventListener("DOMContentLoaded", createPrecomputeButton);
-    }
+    // Bouton flottant de précompute retiré (debug). Le précompute s'auto-déclenche
+    // via l'événement `sn-ai-gck` ci-dessus — pas besoin d'UI visible.
   }
 
   // --- Proposition box injection (runs in ticket iframes) ---

@@ -40,7 +40,7 @@
     // Allow our citation buttons (and their data-* attrs) through DOMPurify
     return window.DOMPurify.sanitize(html, {
       ADD_TAGS: ["button"],
-      ADD_ATTR: ["data-source-num", "data-quote-id", "type"],
+      ADD_ATTR: ["data-source-num", "data-quote-id", "data-quote", "type"],
     });
   }
 
@@ -65,54 +65,49 @@
    *
    * Returns: { text, quotes }  where quotes is an array indexed by quote id.
    */
+  // Remplace [N] / [N: "verbatim"] par des boutons cliquables. Le quote est
+  // embarqué directement dans data-quote (URL-encodé) pour qu'un handler délégué
+  // puisse le résoudre même après qu'un re-render de streaming ait détaché le
+  // bouton. Retourne le texte (string) prêt pour le markdown.
   function injectCitationPlaceholders(text, sources) {
     var bySource = {};
     sources.forEach(function (s) { bySource[s.number] = s; });
-    var quotes = [];
-    // Match [N] or [N: "..."] in one pass; the optional group captures the quote
     var regex = /\[(\d+)(?::\s*"([^"]+)")?\]/g;
-    var newText = text.replace(regex, function (match, numStr, quote) {
+    return String(text).replace(regex, function (match, numStr, quote) {
       var num = parseInt(numStr, 10);
-      if (!bySource[num]) return match; // unknown citation, leave as-is
+      if (!bySource[num]) return match; // citation inconnue, on laisse tel quel
       var attrs = 'class="sn-ai-citation" data-source-num="' + num + '"';
-      if (quote) {
-        var qid = quotes.length;
-        quotes.push(quote);
-        attrs += ' data-quote-id="' + qid + '"';
-      }
+      if (quote) attrs += ' data-quote="' + encodeURIComponent(quote) + '"';
       return '<button type="button" ' + attrs + '>[' + num + ']</button>';
     });
-    return { text: newText, quotes: quotes };
   }
 
-  function attachCitationHandlers(bodyEl, sources, quotes) {
-    var bySource = {};
-    sources.forEach(function (s) { bySource[s.number] = s; });
-    var citations = bodyEl.querySelectorAll(".sn-ai-citation");
-    citations.forEach(function (btn) {
+  // Handler de citation DÉLÉGUÉ, installé une fois par body. Utilise mousedown
+  // (pas click) pour se déclencher AVANT qu'un re-render de streaming ne détache
+  // le bouton, et résout la source depuis body._snSources (qui survit au
+  // re-render). C'est ce qui rend les sources cliquables dès leur apparition.
+  function installCitationDelegation(body) {
+    function press(e) {
+      if (e.type === "mousedown" && e.button !== 0) return;
+      var btn = e.target && e.target.closest ? e.target.closest(".sn-ai-citation") : null;
+      if (!btn) return;
+      e.preventDefault();
+      var sources = body._snSources || [];
       var num = parseInt(btn.getAttribute("data-source-num"), 10);
-      var src = bySource[num];
-      if (!src) return;
-
-      var quote = "";
-      var qidStr = btn.getAttribute("data-quote-id");
-      if (qidStr !== null) {
-        var qid = parseInt(qidStr, 10);
-        if (!isNaN(qid) && quotes[qid]) quote = quotes[qid];
+      var src = null;
+      for (var i = 0; i < sources.length; i++) {
+        if (sources[i].number === num) { src = sources[i]; break; }
       }
-
-      btn.addEventListener("click", function (e) {
-        e.preventDefault();
-        e.stopPropagation();
-        if (window.SnAiSourcesModal && typeof window.SnAiSourcesModal.open === "function") {
-          // Pass a per-citation override quote: the modal will highlight just
-          // the phrase the LLM cited, not the whole chunk.
-          window.SnAiSourcesModal.open(src, { quote: quote });
-        }
-      });
-      btn.title = quote
-        ? '« ' + (quote.length > 80 ? quote.slice(0, 80) + '…' : quote) + ' »'
-        : (src.title || "Source " + num);
+      if (!src) return;
+      var raw = btn.getAttribute("data-quote");
+      var quote = raw ? decodeURIComponent(raw) : "";
+      if (window.SnAiSourcesModal && typeof window.SnAiSourcesModal.open === "function") {
+        window.SnAiSourcesModal.open(src, { quote: quote });
+      }
+    }
+    body.addEventListener("mousedown", press);
+    body.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" || e.key === " ") press(e);
     });
   }
 
@@ -156,6 +151,7 @@
     // Body (state-dependent)
     var body = document.createElement("div");
     body.className = "sn-ai-proposition-body markdown";
+    installCitationDelegation(body);
     box.appendChild(body);
 
     // Status footer (optional, for transient messages)
@@ -230,9 +226,8 @@
       return;
     }
 
-    var injected = injectCitationPlaceholders(text, sources);
-    refs.body.innerHTML = renderMarkdown(injected.text);
-    attachCitationHandlers(refs.body, sources, injected.quotes);
+    refs.body._snSources = sources;
+    refs.body.innerHTML = renderMarkdown(injectCitationPlaceholders(text, sources));
 
     // Sources list at the bottom of the body for quick scan
     if (sources.length > 0) {
@@ -305,10 +300,43 @@
     };
   }
 
+  // --- Streaming (token par token) ---
+
+  function beginStream(host, options) {
+    var refs = ensureSkeleton(host, options);
+    refs.body._snSources = [];
+    refs.body.innerHTML = "";
+    refs.generateBtn.disabled = true;
+    refs.generateBtn.classList.add("sn-ai-loading");
+    refs.generateBtn.innerHTML = SPINNER_SVG + '<span class="sn-ai-btn-label">Génération…</span>';
+    refs.status.textContent = "Recherche des sources…";
+    refs.copyBtn.disabled = true;
+    return refs;
+  }
+
+  // Re-render du texte accumulé à chaque chunk. Les sources (déjà connues, car
+  // émises avant le texte) rendent les [N] cliquables immédiatement.
+  function updateStream(host, fullText, sources) {
+    var refs = getRefs(host);
+    if (!refs) return;
+    var srcs = Array.isArray(sources) ? sources : [];
+    refs.body._snSources = srcs;
+    refs.body.innerHTML = renderMarkdown(injectCitationPlaceholders(fullText || "", srcs));
+    refs.status.textContent = "Génération en cours…";
+  }
+
+  // Rendu final : corps complet + liste des sources + copie/régénérer.
+  function finishStream(host, fullText, sources, options) {
+    render(host, { text: fullText, sources: sources }, options);
+  }
+
   window.SnAiPropositionBox = {
     render: render,
     setEmpty: setEmpty,
     setLoading: setLoading,
     setError: setError,
+    beginStream: beginStream,
+    updateStream: updateStream,
+    finishStream: finishStream,
   };
 })();
