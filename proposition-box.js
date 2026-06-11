@@ -299,7 +299,24 @@
       // Drop the "Sources" list from the clipboard text
       var sourcesEl = clone.querySelector(".sn-ai-proposition-sources");
       if (sourcesEl) sourcesEl.remove();
-      var plain = (clone.textContent || "").trim();
+
+      // Remplacer chaque citation [N] par l'URL de la source (+ #page=N pour les
+      // PDF ; rien pour HTML/KB) — plus utile que des numéros dans le texte collé.
+      var srcByNum = {};
+      (refs.body._snSources || []).forEach(function (s) { srcByNum[s.number] = s; });
+      clone.querySelectorAll(".sn-ai-citation").forEach(function (btn) {
+        var s = srcByNum[parseInt(btn.getAttribute("data-source-num"), 10)];
+        var u = "";
+        if (s && s.source_url) {
+          u = s.source_url;
+          if (s.file_type === "pdf" && typeof s.page_number === "number" && !/[#&]page=/.test(u)) {
+            u += (u.indexOf("#") !== -1 ? "&" : "#") + "page=" + s.page_number;
+          }
+        }
+        btn.replaceWith(document.createTextNode(u ? " " + u : ""));
+      });
+
+      var plain = (clone.textContent || "").replace(/[ \t]{2,}/g, " ").trim();
       navigator.clipboard.writeText(plain).then(function () {
         refs.status.textContent = "Copié !";
         setTimeout(function () { refs.status.textContent = ""; }, 1800);
