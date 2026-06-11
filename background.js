@@ -250,6 +250,8 @@ function readSSEStream(body, port) {
             port.postMessage({ type: "chunk", text: ev.content });
           } else if (ev.type === "sources") {
             port.postMessage({ type: "sources", sources: enrichStreamSources(ev.sources) });
+          } else if (ev.type === "progress" && ev.message) {
+            port.postMessage({ type: "progress", message: ev.message });
           }
           // metadata ignoré ; done géré par le finally côté handler
         } catch (e) { /* keepalive / ligne non-JSON : ignorer */ }

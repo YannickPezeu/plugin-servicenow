@@ -148,6 +148,14 @@
     header.appendChild(actions);
     box.appendChild(header);
 
+    // Search log (progression du streaming : requête, étapes, comptage site/KB)
+    var log = document.createElement("div");
+    log.className = "sn-ai-proposition-log";
+    log.style.cssText = "display:none;font-size:11px;color:#6b7785;background:#f4f6f8;" +
+      "border:1px solid #e1e7ed;border-radius:4px;padding:6px 8px;margin-bottom:8px;" +
+      "max-height:90px;overflow:auto;white-space:pre-wrap;line-height:1.45;";
+    box.appendChild(log);
+
     // Body (state-dependent)
     var body = document.createElement("div");
     body.className = "sn-ai-proposition-body markdown";
@@ -162,7 +170,7 @@
     while (host.firstChild) host.removeChild(host.firstChild);
     host.appendChild(box);
 
-    return { box: box, generateBtn: generateBtn, copyBtn: copyBtn, body: body, status: status };
+    return { box: box, generateBtn: generateBtn, copyBtn: copyBtn, body: body, status: status, log: log };
   }
 
   function getRefs(host) {
@@ -174,6 +182,7 @@
       copyBtn: box.querySelector(".sn-ai-proposition-copy"),
       body: box.querySelector(".sn-ai-proposition-body"),
       status: box.querySelector(".sn-ai-proposition-status"),
+      log: box.querySelector(".sn-ai-proposition-log"),
     };
   }
 
@@ -306,6 +315,7 @@
     var refs = ensureSkeleton(host, options);
     refs.body._snSources = [];
     refs.body.innerHTML = "";
+    if (refs.log) { refs.log.textContent = ""; refs.log.style.display = "none"; }
     refs.generateBtn.disabled = true;
     refs.generateBtn.classList.add("sn-ai-loading");
     refs.generateBtn.innerHTML = SPINNER_SVG + '<span class="sn-ai-btn-label">Génération…</span>';
@@ -326,8 +336,20 @@
   }
 
   // Rendu final : corps complet + liste des sources + copie/régénérer.
+  // Le log de recherche reste visible (utile pour juger query/pertinence).
   function finishStream(host, fullText, sources, options) {
     render(host, { text: fullText, sources: sources }, options);
+  }
+
+  // Ajoute une ligne au log de recherche (requête, étapes, comptage).
+  function logProgress(host, message) {
+    var refs = getRefs(host);
+    if (!refs || !refs.log || !message) return;
+    refs.log.style.display = "block";
+    var line = document.createElement("div");
+    line.textContent = "• " + message;
+    refs.log.appendChild(line);
+    refs.log.scrollTop = refs.log.scrollHeight;
   }
 
   window.SnAiPropositionBox = {
@@ -338,5 +360,6 @@
     beginStream: beginStream,
     updateStream: updateStream,
     finishStream: finishStream,
+    logProgress: logProgress,
   };
 })();

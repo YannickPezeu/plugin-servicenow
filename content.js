@@ -237,6 +237,8 @@
           } else if (msg.type === "sources") {
             sources = msg.sources || [];
             window.SnAiPropositionBox.updateStream(host, fullText, sources);
+          } else if (msg.type === "progress") {
+            window.SnAiPropositionBox.logProgress(host, msg.message);
           } else if (msg.type === "error") {
             finished = true;
             inFlight = false;
