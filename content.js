@@ -180,7 +180,12 @@
   // --- Inject the autonomous "Proposition IA" box below a textarea ---
 
   function injectPropositionBoxForTextarea(config) {
-    if (BOXES_INJECTED.has(config.id)) return;
+    // Ré-injecter si la box a disparu : ServiceNow re-render le formulaire en AJAX
+    // et retire notre host. On se base sur la présence RÉELLE du host dans le DOM
+    // (isConnected), pas sur un flag "déjà fait" — sinon, après un re-render, la
+    // box ne réapparaît jamais (cas observé chez certains utilisateurs).
+    var existingHost = PROPOSITION_HOSTS.get(config.id);
+    if (existingHost && existingHost.isConnected) return;
 
     var textarea = document.getElementById(config.id);
     if (!textarea) return;
