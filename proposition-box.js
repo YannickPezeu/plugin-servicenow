@@ -306,14 +306,16 @@
       (refs.body._snSources || []).forEach(function (s) { srcByNum[s.number] = s; });
       clone.querySelectorAll(".sn-ai-citation").forEach(function (btn) {
         var s = srcByNum[parseInt(btn.getAttribute("data-source-num"), 10)];
-        var u = "";
-        if (s && s.source_url) {
-          u = s.source_url;
-          if (s.file_type === "pdf" && typeof s.page_number === "number" && !/[#&]page=/.test(u)) {
-            u += (u.indexOf("#") !== -1 ? "&" : "#") + "page=" + s.page_number;
-          }
+        var u = s && s.source_url ? s.source_url : "";
+        // Ignorer les sources sans vraie URL (le backend renvoie "URL not found").
+        if (!/^https?:\/\//i.test(u)) {
+          btn.replaceWith(document.createTextNode(""));
+          return;
         }
-        btn.replaceWith(document.createTextNode(u ? " " + u : ""));
+        if (s.file_type === "pdf" && typeof s.page_number === "number" && !/[#&]page=/.test(u)) {
+          u += (u.indexOf("#") !== -1 ? "&" : "#") + "page=" + s.page_number;
+        }
+        btn.replaceWith(document.createTextNode(" (" + u + ")"));
       });
 
       var plain = (clone.textContent || "").replace(/[ \t]{2,}/g, " ").trim();
