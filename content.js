@@ -186,17 +186,18 @@
   // La textarea existe dans les deux modes (cachée en mode HTML), on privilégie
   // donc l'élément réellement visible.
   function findCommentInsertionPoint() {
+    // Éditeur HTML décoché : textarea simple, seulement si réellement VISIBLE.
     var ta = document.getElementById("activity-stream-comments-textarea");
-    if (ta && ta.offsetParent !== null) {
+    if (ta && ta.offsetParent !== null && ta.offsetHeight > 0) {
       return ta.closest(".sn-stream-textarea-container") || ta.parentElement;
     }
-    // Mode éditeur HTML : iframe TinyMCE du champ commentaires (exclut work_notes)
+    // Éditeur HTML coché : iframe TinyMCE du champ commentaires, visible (exclut work_notes).
     var ifr = document.querySelector('iframe[id$="_ifr"][id*="comment" i]');
-    if (ifr) {
+    if (ifr && ifr.offsetParent !== null) {
       var box = ifr.closest(".tox-tinymce, .mce-tinymce") || ifr.parentElement;
       if (box && box.parentElement) return box;
     }
-    if (ta) return ta.closest(".sn-stream-textarea-container") || ta.parentElement;
+    // Rien de visible/prêt (ex. TinyMCE pas encore chargé) → on réessaiera via l'observer.
     return null;
   }
 
@@ -206,10 +207,18 @@
     // (isConnected), pas sur un flag "déjà fait" — sinon, après un re-render, la
     // box ne réapparaît jamais (cas observé chez certains utilisateurs).
     var existingHost = PROPOSITION_HOSTS.get(config.id);
-    if (existingHost && existingHost.isConnected) return;
+    // Présente ET visible → rien à faire. `isConnected` seul ne suffit pas : au
+    // changement de mode d'édition (HTML coché/décoché), l'ancien host reste
+    // connecté mais devient caché (offsetParent null) → il faut le ré-ancrer.
+    if (existingHost && existingHost.isConnected && existingHost.offsetParent !== null) return;
 
     var container = findCommentInsertionPoint();
     if (!container || !container.parentElement) return;
+
+    // Retirer un host obsolète (déconnecté, ou caché car le mode d'édition a changé).
+    if (existingHost && existingHost.parentElement) {
+      existingHost.parentElement.removeChild(existingHost);
+    }
 
     var host = document.createElement("div");
     host.className = "sn-ai-proposition-host";
