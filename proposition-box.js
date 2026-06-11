@@ -102,7 +102,8 @@
       var raw = btn.getAttribute("data-quote");
       var quote = raw ? decodeURIComponent(raw) : "";
       if (window.SnAiSourcesModal && typeof window.SnAiSourcesModal.open === "function") {
-        window.SnAiSourcesModal.open(src, { quote: quote });
+        // corpus = toutes les sources → fallback si la citation pointe la mauvaise source
+        window.SnAiSourcesModal.open(src, { quote: quote, corpus: sources });
       }
     }
     body.addEventListener("mousedown", press);

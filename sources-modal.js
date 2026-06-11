@@ -149,6 +149,51 @@
     return findEndpoints(concat, segment);
   }
 
+  // Combien de segments de `quote` sont retrouvés dans `text` (exact-first).
+  function segmentsMatched(quote, text) {
+    var segs = splitOnEllipsis(quote);
+    var out = { matched: 0, total: segs.length, exact: 0 };
+    if (!segs.length || !text) return out;
+    for (var i = 0; i < segs.length; i++) {
+      var ranges = findSegment(text, segs[i]);
+      if (ranges.length === 0) continue;
+      out.matched++;
+      var allExact = true;
+      for (var j = 0; j < ranges.length; j++) {
+        if (ranges[j].quality !== "exact") allExact = false;
+      }
+      if (allExact) out.exact++;
+    }
+    return out;
+  }
+
+  // L'extrait est-il présent (au moins en majorité) dans le texte ?
+  function quoteIsIn(quote, text) {
+    var r = segmentsMatched(quote, text);
+    return r.total > 0 && (r.exact >= 1 || r.matched >= Math.ceil(r.total / 2));
+  }
+
+  // Cherche, parmi les autres sources, celle qui contient le mieux l'extrait.
+  // Utilisé quand la source citée par le LLM ne contient pas la phrase (le LLM
+  // se trompe parfois de numéro de source). Retourne la meilleure source ou null.
+  function findBestSource(quote, corpus, excludeNumber) {
+    var best = null, bE = -1, bM = -1, bS = -1;
+    for (var i = 0; i < corpus.length; i++) {
+      var s = corpus[i];
+      if (s.number === excludeNumber) continue;
+      var text = s.context_content || s.precise_content || s.snippet || "";
+      var r = segmentsMatched(quote, text);
+      if (r.matched === 0) continue;
+      var sc = typeof s.score === "number" ? s.score : 0;
+      if (r.exact > bE ||
+          (r.exact === bE && r.matched > bM) ||
+          (r.exact === bE && r.matched === bM && sc > bS)) {
+        best = s; bE = r.exact; bM = r.matched; bS = sc;
+      }
+    }
+    return best;
+  }
+
   function highlightQuote(container, quote) {
     if (!quote) return;
     var segments = splitOnEllipsis(quote);
@@ -265,6 +310,20 @@
     close(); // close any existing modal first
     options = options || {};
 
+    // Fallback "mauvaise source" : si la citation pointe une source qui ne
+    // contient pas l'extrait (le LLM se trompe parfois de numéro), on bascule
+    // sur la source qui le contient réellement.
+    var _quote = options.quote || source.quote || "";
+    var _corpus = Array.isArray(options.corpus) ? options.corpus : [];
+    var correctedFrom = null;
+    if (_quote && _corpus.length > 1) {
+      var citedText = source.context_content || source.precise_content || source.snippet || "";
+      if (!quoteIsIn(_quote, citedText)) {
+        var alt = findBestSource(_quote, _corpus, source.number);
+        if (alt) { correctedFrom = source.number; source = alt; }
+      }
+    }
+
     var backdrop = document.createElement("div");
     backdrop.id = BACKDROP_ID;
     backdrop.className = "sn-ai-modal-backdrop";
@@ -306,6 +365,17 @@
       meta.className = "sn-ai-modal-meta";
       meta.textContent = metaParts.join(" · ");
       modal.appendChild(meta);
+    }
+
+    // Note si on a corrigé la source (citation pointant la mauvaise source).
+    if (correctedFrom !== null) {
+      var note = document.createElement("div");
+      note.className = "sn-ai-modal-note";
+      note.style.cssText = "font-size:11px;color:#8a6d00;background:#fff8e1;" +
+        "border:1px solid #ffe082;border-radius:4px;padding:6px 8px;margin-bottom:8px;";
+      note.textContent = "La citation [" + correctedFrom + "] ne contenait pas l'extrait — " +
+        "affichage de la source [" + source.number + "] qui le contient.";
+      modal.appendChild(note);
     }
 
     // Body — markdown rendu. On affiche context_content (chunk parent large)
