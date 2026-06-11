@@ -179,6 +179,27 @@
 
   // --- Inject the autonomous "Proposition IA" box below a textarea ---
 
+  // Trouve l'élément après lequel insérer la box, selon le mode d'édition du
+  // champ commentaire (le champ "Commentaires visibles par les clients") :
+  //   - Éditeur HTML décoché → textarea simple `activity-stream-comments-textarea`
+  //   - Éditeur HTML coché    → éditeur TinyMCE (iframe `…comment…_ifr`), conteneur `.tox-tinymce`
+  // La textarea existe dans les deux modes (cachée en mode HTML), on privilégie
+  // donc l'élément réellement visible.
+  function findCommentInsertionPoint() {
+    var ta = document.getElementById("activity-stream-comments-textarea");
+    if (ta && ta.offsetParent !== null) {
+      return ta.closest(".sn-stream-textarea-container") || ta.parentElement;
+    }
+    // Mode éditeur HTML : iframe TinyMCE du champ commentaires (exclut work_notes)
+    var ifr = document.querySelector('iframe[id$="_ifr"][id*="comment" i]');
+    if (ifr) {
+      var box = ifr.closest(".tox-tinymce, .mce-tinymce") || ifr.parentElement;
+      if (box && box.parentElement) return box;
+    }
+    if (ta) return ta.closest(".sn-stream-textarea-container") || ta.parentElement;
+    return null;
+  }
+
   function injectPropositionBoxForTextarea(config) {
     // Ré-injecter si la box a disparu : ServiceNow re-render le formulaire en AJAX
     // et retire notre host. On se base sur la présence RÉELLE du host dans le DOM
@@ -187,10 +208,7 @@
     var existingHost = PROPOSITION_HOSTS.get(config.id);
     if (existingHost && existingHost.isConnected) return;
 
-    var textarea = document.getElementById(config.id);
-    if (!textarea) return;
-
-    var container = textarea.closest(".sn-stream-textarea-container") || textarea.parentElement;
+    var container = findCommentInsertionPoint();
     if (!container || !container.parentElement) return;
 
     var host = document.createElement("div");
