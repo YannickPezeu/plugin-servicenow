@@ -8,6 +8,46 @@ var API_KEY_DEFAULT = "";
 // gardé pour le champ `library_used`/logs côté backend.
 var API_LIBRARY = "servicenow_obo";
 
+// Modele par DEFAUT. Doit rester aligne avec l'<option> de popup.html et avec
+// les DEFAULTS de content.js / popup.js.
+//
+// 10.08.2026 : Qwen3.6-35B-A3B remplace Kimi-K2.7-Code comme defaut, au terme
+// de l'evaluation de bout en bout (epfl-scraper,
+// docs/rapport-evaluation-assistants-2026-08.md). Il concede 0,26 point sur le
+// banc de recherche — un ecart inferieur au bruit par ticket — pour un tiers de
+// temps en moins et le plus faible taux d'invention du panel.
+var DEFAULT_MODEL = "Qwen/Qwen3.6-35B-A3B";
+
+// Modele "Large", conserve dans le selecteur pour les demandes critiques :
+// securite, donnees personnelles, procedures reglementaires, demandes VIP, et
+// rattrapage quand la reponse standard ne convient pas.
+var LARGE_MODEL = "moonshotai/Kimi-K2.7-Code";
+
+// Modeles retires cote RCP ou ecartes par la mesure. Le choix de l'utilisateur
+// vit dans chrome.storage, donc un id retire survit a la mise a jour de
+// l'extension et fait echouer — ou pire, reussir avec un mauvais modele — tous
+// les appels RAG. On le remappe une fois, a l'installation/mise a jour.
+// 2026-07-30 : Kimi-K2.6 n'est plus servi 24/7, remplace par Kimi-K2.7-Code.
+// 2026-08-10 : Mistral-Small et gpt-oss sortent du catalogue. gpt-oss n'est pas
+//   retire parce qu'il n'est plus servi, mais parce qu'il produit une
+//   affirmation contredite par ses propres sources a chaque reponse.
+var RETIRED_MODELS = [
+  "moonshotai/Kimi-K2.6",
+  "moonshotai/Kimi-K2.5",
+  "mistralai/Mistral-Small-3.2-24B-Instruct-2506-bfloat16",
+  "openai/gpt-oss-120b-bfloat16",
+];
+
+chrome.runtime.onInstalled.addListener(function () {
+  chrome.storage.local.get({ model: "" }, function (data) {
+    if (data.model && RETIRED_MODELS.indexOf(data.model) !== -1) {
+      chrome.storage.local.set({ model: DEFAULT_MODEL }, function () {
+        console.log("[SN AI Plugin] Modele retire " + data.model + " -> " + DEFAULT_MODEL);
+      });
+    }
+  });
+});
+
 // Note: the LLM system prompt lives server-side (DEFAULT_ANSWER_SYSTEM_PROMPT
 // in Hierarchical_search/full_RAG_api/core/prompts.py) — it dictates the
 // `[N: "verbatim quote"]` citation format that this extension parses.
@@ -334,7 +374,7 @@ function handlePrecomputeInit(request) {
   var assignmentGroup = request.assignmentGroup;
 
   chrome.storage.local.get(
-    { precomputeCache: {}, apiKey: "", rerank: true, model: "moonshotai/Kimi-K2.6", topK: 10, indexKey: "" },
+    { precomputeCache: {}, apiKey: "", rerank: true, model: DEFAULT_MODEL, topK: 10, indexKey: "" },
     function (settings) {
       // Plus de gate API key : l'auth passe par le Bearer OIDC (buildRagHeaders).
       // Si l'utilisateur n'est pas connecté, les appels RAG renverront 401.

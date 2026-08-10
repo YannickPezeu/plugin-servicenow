@@ -6,9 +6,11 @@
 
   // --- API Configuration ---
   var API_LIBRARY = "large_campus2";
+  // Doit rester aligne sur DEFAULT_MODEL dans background.js et sur l'<option>
+  // selectionnee par defaut dans popup.html.
   var DEFAULTS = {
     rerank: true,
-    model: "moonshotai/Kimi-K2.6",
+    model: "Qwen/Qwen3.6-35B-A3B",
     topK: 10,
     indexKey: "",
   };

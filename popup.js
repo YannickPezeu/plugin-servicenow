@@ -1,8 +1,10 @@
 // popup.js — Manages plugin settings via chrome.storage
 
+// Doit rester aligne sur DEFAULT_MODEL dans background.js, sur les DEFAULTS de
+// content.js et sur la premiere <option> de popup.html.
 var DEFAULTS = {
   rerank: true,
-  model: "moonshotai/Kimi-K2.6",
+  model: "Qwen/Qwen3.6-35B-A3B",
   topK: 10,
   assignmentGroup: "",
 };
