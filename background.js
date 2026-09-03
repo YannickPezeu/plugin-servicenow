@@ -276,15 +276,46 @@ function enrichStreamSources(sources) {
   });
 }
 
+// Silence toléré ENTRE DEUX événements SSE avant d'abandonner. C'est un délai
+// d'inactivité, pas une durée totale : le backend laisse au modèle jusqu'à 300 s
+// pour rédiger, et une réponse longue mais qui progresse ne doit pas être coupée.
+var STREAM_IDLE_TIMEOUT_MS = 120000;
+// Garde-fou absolu, pour qu'un flux qui bavarde sans jamais conclure finisse
+// quand même par rendre la main.
+var STREAM_MAX_MS = 600000;
+
+// /!\ SANS CECI, LE STREAMING MEURT SUR LES RÉPONSES LENTES.
+// Chrome termine un service worker MV3 après 30 s sans activité, et lire des
+// octets d'un `fetch` ne compte PAS comme une activité : seuls un appel d'API
+// `chrome.*` ou la réception d'un événement réarment le compteur. Le port est
+// alors fermé sous les pieds du content script, qui affiche « Connexion
+// interrompue » — sans erreur nulle part, puisque techniquement rien n'a échoué.
+// Un appel bidon toutes les 20 s suffit à réarmer le compteur.
+//
+// La cause première était côté backend (le raisonnement du modèle n'était pas
+// relayé, cf. `chat_completion_stream_events` dans Hierarchical_search : 30,5 s
+// de silence mesurées le 03.09.2026 sur Qwen3.6). Ce keepalive reste néanmoins
+// nécessaire : il protège aussi la phase de recherche et tout futur modèle qui
+// ne dirait rien pendant une demi-minute.
+function startKeepalive() {
+  return setInterval(function () {
+    chrome.runtime.getPlatformInfo(function () {
+      if (chrome.runtime.lastError) { /* ignore */ }
+    });
+  }, 20000);
+}
+
 // Lit le flux SSE et relaie chunks/sources au port. Événements backend :
-// {type:"metadata"} {type:"sources",sources} {type:"answer_chunk",content} {type:"done"}
-function readSSEStream(body, port) {
+// {type:"metadata"} {type:"sources",sources} {type:"progress",message}
+// {type:"reasoning_chunk",content} {type:"answer_chunk",content} {type:"done"}
+function readSSEStream(body, port, onActivity) {
   var reader = body.getReader();
   var decoder = new TextDecoder();
   var buffer = "";
   function pump() {
     return reader.read().then(function (result) {
       if (result.done) return;
+      if (onActivity) onActivity();
       buffer += decoder.decode(result.value, { stream: true });
       var lines = buffer.split("\n");
       buffer = lines.pop(); // garde la dernière ligne potentiellement incomplète
@@ -297,6 +328,8 @@ function readSSEStream(body, port) {
           var ev = JSON.parse(data);
           if (ev.type === "answer_chunk" && ev.content) {
             port.postMessage({ type: "chunk", text: ev.content });
+          } else if (ev.type === "reasoning_chunk" && ev.content) {
+            port.postMessage({ type: "reasoning", text: ev.content });
           } else if (ev.type === "sources") {
             port.postMessage({ type: "sources", sources: enrichStreamSources(ev.sources) });
           } else if (ev.type === "progress" && ev.message) {
@@ -338,7 +371,23 @@ chrome.runtime.onConnect.addListener(function (port) {
             return;
           }
           var controller = new AbortController();
-          var timeoutId = setTimeout(function () { controller.abort(); }, 120000);
+          var idleTimer = null;
+          var abortedForIdle = false;
+          var keepalive = startKeepalive();
+
+          function armIdleTimer() {
+            if (idleTimer) clearTimeout(idleTimer);
+            idleTimer = setTimeout(function () {
+              abortedForIdle = true;
+              controller.abort();
+            }, STREAM_IDLE_TIMEOUT_MS);
+          }
+          var maxTimer = setTimeout(function () { controller.abort(); }, STREAM_MAX_MS);
+          armIdleTimer();
+
+          // L'onglet est fermé / la page rechargée : inutile de laisser le
+          // modèle écrire dans le vide, on coupe l'appel.
+          port.onDisconnect.addListener(function () { controller.abort(); });
 
           fetch(API_URL, {
             method: "POST",
@@ -347,19 +396,25 @@ chrome.runtime.onConnect.addListener(function (port) {
             signal: controller.signal,
           })
           .then(function (response) {
+            armIdleTimer();
             if (!response.ok) {
               return response.text().then(function (b) {
                 throw new Error("API error: " + response.status + " - " + b.substring(0, 200));
               });
             }
-            return readSSEStream(response.body, port);
+            return readSSEStream(response.body, port, armIdleTimer);
           })
           .catch(function (err) {
-            port.postMessage({ type: "error", error: err.message });
+            var message = abortedForIdle
+              ? "Le serveur n'a rien envoyé pendant " + (STREAM_IDLE_TIMEOUT_MS / 1000) + " s — génération abandonnée."
+              : err.message;
+            try { port.postMessage({ type: "error", error: message }); } catch (e) { /* port fermé */ }
           })
           .finally(function () {
-            clearTimeout(timeoutId);
-            port.postMessage({ type: "done" });
+            clearTimeout(idleTimer);
+            clearTimeout(maxTimer);
+            clearInterval(keepalive);
+            try { port.postMessage({ type: "done" }); } catch (e) { /* port fermé */ }
           });
         });
       });

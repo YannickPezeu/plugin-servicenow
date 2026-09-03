@@ -261,6 +261,7 @@
 
         var port = chrome.runtime.connect({ name: "rag-stream" });
         var fullText = "";
+        var reasoning = "";
         var sources = [];
         var finished = false;
 
@@ -268,6 +269,11 @@
           if (msg.type === "chunk") {
             fullText += msg.text;
             window.SnAiPropositionBox.updateStream(host, fullText, sources);
+          } else if (msg.type === "reasoning") {
+            // Raisonnement du modèle : bulle séparée. Il ne doit JAMAIS rejoindre
+            // `fullText` — ni la réponse affichée, ni le cache, ni le presse-papier.
+            reasoning += msg.text;
+            window.SnAiPropositionBox.updateReasoning(host, reasoning);
           } else if (msg.type === "sources") {
             sources = msg.sources || [];
             window.SnAiPropositionBox.updateStream(host, fullText, sources);

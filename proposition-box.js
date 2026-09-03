@@ -191,6 +191,37 @@
       "max-height:90px;overflow:auto;white-space:pre-wrap;line-height:1.45;";
     box.appendChild(log);
 
+    // Bulle de raisonnement : ce que le modèle se dit AVANT d'écrire, affiché
+    // en parallèle de la rédaction. Repliée d'office dès que la réponse
+    // commence — utile pour juger un cas litigieux, encombrant le reste du temps.
+    var reasoning = document.createElement("div");
+    reasoning.className = "sn-ai-proposition-reasoning";
+    reasoning.style.cssText = "display:none;margin-bottom:8px;";
+
+    var reasoningToggle = document.createElement("button");
+    reasoningToggle.type = "button";
+    reasoningToggle.className = "sn-ai-reasoning-toggle";
+    reasoningToggle.style.cssText =
+      "display:flex;align-items:center;gap:6px;width:100%;text-align:left;cursor:pointer;" +
+      "border:1px solid #e1e7ed;border-radius:4px;background:#faf7f2;color:#8a6d3b;" +
+      "font-size:11px;padding:5px 8px;";
+    reasoning.appendChild(reasoningToggle);
+
+    var reasoningText = document.createElement("div");
+    reasoningText.className = "sn-ai-reasoning-text";
+    reasoningText.style.cssText =
+      "font-size:11px;color:#7a6a55;background:#faf7f2;border:1px solid #e1e7ed;border-top:none;" +
+      "border-radius:0 0 4px 4px;padding:6px 8px;max-height:140px;overflow:auto;" +
+      "white-space:pre-wrap;line-height:1.45;font-style:italic;";
+    reasoning.appendChild(reasoningText);
+
+    reasoningToggle.addEventListener("click", function () {
+      reasoning._snUserToggled = true;
+      setReasoningOpen(reasoning, reasoningText.style.display === "none");
+    });
+
+    box.appendChild(reasoning);
+
     // Body (state-dependent)
     var body = document.createElement("div");
     body.className = "sn-ai-proposition-body markdown";
@@ -205,7 +236,10 @@
     while (host.firstChild) host.removeChild(host.firstChild);
     host.appendChild(box);
 
-    return { box: box, generateBtn: generateBtn, copyBtn: copyBtn, body: body, status: status, log: log };
+    return {
+      box: box, generateBtn: generateBtn, copyBtn: copyBtn,
+      body: body, status: status, log: log, reasoning: reasoning,
+    };
   }
 
   function getRefs(host) {
@@ -218,7 +252,73 @@
       body: box.querySelector(".sn-ai-proposition-body"),
       status: box.querySelector(".sn-ai-proposition-status"),
       log: box.querySelector(".sn-ai-proposition-log"),
+      reasoning: box.querySelector(".sn-ai-proposition-reasoning"),
     };
+  }
+
+  // --- Bulle de raisonnement ---
+
+  function setReasoningOpen(reasoning, open) {
+    var text = reasoning.querySelector(".sn-ai-reasoning-text");
+    text.style.display = open ? "block" : "none";
+    reasoning.querySelector(".sn-ai-reasoning-toggle").style.borderRadius = open ? "4px 4px 0 0" : "4px";
+    renderReasoningLabel(reasoning);
+    if (open) text.scrollTop = text.scrollHeight;
+  }
+
+  function renderReasoningLabel(reasoning) {
+    var toggle = reasoning.querySelector(".sn-ai-reasoning-toggle");
+    var open = reasoning.querySelector(".sn-ai-reasoning-text").style.display !== "none";
+    var chars = (reasoning._snText || "").length;
+    var seconds = reasoning._snStart
+      ? Math.round(((reasoning._snEnd || Date.now()) - reasoning._snStart) / 1000)
+      : 0;
+    var meta = reasoning._snEnd
+      ? seconds + " s · " + chars.toLocaleString("fr-CH") + " caractères"
+      : "en cours…";
+    toggle.textContent = (open ? "▾" : "▸") + " Raisonnement du modèle — " + meta;
+  }
+
+  // Le raisonnement arrive avant (et pendant) la réponse. Il vit dans sa propre
+  // bulle : il n'entre jamais dans le corps de la proposition, donc jamais dans
+  // ce que l'agent copie ou envoie à l'usager.
+  function updateReasoning(host, text) {
+    var refs = getRefs(host);
+    if (!refs || !refs.reasoning) return;
+    var reasoning = refs.reasoning;
+    if (!reasoning._snStart) {
+      reasoning._snStart = Date.now();
+      reasoning.style.display = "block";
+      setReasoningOpen(reasoning, true);
+    }
+    reasoning._snText = text;
+    if (refs.status && !refs.body.textContent) refs.status.textContent = "Réflexion du modèle…";
+    var el = reasoning.querySelector(".sn-ai-reasoning-text");
+    var stuckToBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 24;
+    el.textContent = text;
+    if (stuckToBottom) el.scrollTop = el.scrollHeight;
+    renderReasoningLabel(reasoning);
+  }
+
+  // Premier jeton de réponse : le raisonnement est terminé, on le replie (sauf
+  // si l'agent l'a ouvert ou fermé lui-même — son choix prime).
+  function sealReasoning(refs) {
+    var reasoning = refs.reasoning;
+    if (!reasoning || !reasoning._snStart || reasoning._snEnd) return;
+    reasoning._snEnd = Date.now();
+    if (!reasoning._snUserToggled) setReasoningOpen(reasoning, false);
+    else renderReasoningLabel(reasoning);
+  }
+
+  function resetReasoning(refs) {
+    var reasoning = refs.reasoning;
+    if (!reasoning) return;
+    reasoning._snStart = null;
+    reasoning._snEnd = null;
+    reasoning._snText = "";
+    reasoning._snUserToggled = false;
+    reasoning.querySelector(".sn-ai-reasoning-text").textContent = "";
+    reasoning.style.display = "none";
   }
 
   function ensureSkeleton(host, options) {
@@ -229,6 +329,9 @@
 
   function setEmpty(host, options) {
     var refs = ensureSkeleton(host, options);
+    // Réponse vide apres une longue reflexion : la bulle reste, figée. C'est
+    // précisément le cas où le raisonnement explique ce qui s'est passé.
+    sealReasoning(refs);
     refs.body.innerHTML = '<p class="sn-ai-proposition-placeholder">' +
       "Cliquez sur <strong>Générer</strong> pour proposer une réponse à partir des documents du référentiel." +
       "</p>";
@@ -250,6 +353,10 @@
 
   function setError(host, message, options) {
     var refs = ensureSkeleton(host, options);
+    // Panne pendant la réflexion : on fige la bulle plutôt que de la laisser
+    // afficher « en cours… » indéfiniment. Elle reste consultable — c'est
+    // souvent là que se lit la raison de l'échec.
+    sealReasoning(refs);
     refs.body.innerHTML = '<p class="sn-ai-proposition-error">' +
       "Erreur : " + (message || "Impossible de générer la proposition.") +
       "</p>";
@@ -262,6 +369,7 @@
 
   function render(host, data, options) {
     var refs = ensureSkeleton(host, options);
+    sealReasoning(refs);
     var text = (data && data.text) || "";
     var sources = (data && Array.isArray(data.sources)) ? data.sources : [];
 
@@ -410,6 +518,7 @@
     refs.body._snSources = [];
     refs.body.innerHTML = "";
     if (refs.log) { refs.log.textContent = ""; refs.log.style.display = "none"; }
+    resetReasoning(refs);
     refs.generateBtn.disabled = true;
     refs.generateBtn.classList.add("sn-ai-loading");
     refs.generateBtn.innerHTML = SPINNER_SVG + '<span class="sn-ai-btn-label">Génération…</span>';
@@ -423,6 +532,7 @@
   function updateStream(host, fullText, sources) {
     var refs = getRefs(host);
     if (!refs) return;
+    if (fullText) sealReasoning(refs);
     var srcs = Array.isArray(sources) ? sources : [];
     refs.body._snSources = srcs;
     refs.body.innerHTML = renderMarkdown(injectCitationPlaceholders(fullText || "", srcs));
@@ -453,6 +563,7 @@
     setError: setError,
     beginStream: beginStream,
     updateStream: updateStream,
+    updateReasoning: updateReasoning,
     finishStream: finishStream,
     logProgress: logProgress,
   };
