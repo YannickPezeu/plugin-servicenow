@@ -13,9 +13,18 @@ var API_LIBRARY = "servicenow_obo";
 //
 // 10.08.2026 : Qwen3.6-35B-A3B remplace Kimi-K2.7-Code comme defaut, au terme
 // de l'evaluation de bout en bout (epfl-scraper,
-// docs/rapport-evaluation-assistants-2026-08.md). Il concede 0,26 point sur le
-// banc de recherche — un ecart inferieur au bruit par ticket — pour un tiers de
-// temps en moins et le plus faible taux d'invention du panel.
+// docs/rapport-evaluation-assistants-2026-08.md).
+//
+// /!\ 02.09.2026 : Qwen3.8-27B a ete retenu comme defaut puis ANNULE le jour
+// meme. Il est DEMONTRE meilleur sur le banc — +0,178 [+0,059 ; +0,296] en
+// apparie sur 264 tickets, grille ancree — et il coute moins cher. Mais RCP ne
+// le sert PAS 24/7 : un modele charge a la demande impose 10 a 15 minutes de
+// demarrage a froid au premier usager qui le sollicite. Redhibitoire pour un
+// guichet, quelle que soit la qualite.
+//
+// La campagne des 01-02.09 avait mesure qualite, prix et latence, et OMIS la
+// disponibilite — que le rapport d'aout suivait pourtant, colonne "24/7" contre
+// "a la demande". A reconsiderer si Qwen3.8 passe en service permanent.
 var DEFAULT_MODEL = "Qwen/Qwen3.6-35B-A3B";
 
 // Modele "Large", conserve dans le selecteur pour les demandes critiques :
