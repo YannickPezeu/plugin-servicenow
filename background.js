@@ -8,10 +8,23 @@ var API_KEY_DEFAULT = "";
 // gardé pour le champ `library_used`/logs côté backend.
 var API_LIBRARY = "servicenow_obo";
 
-// Modele par DEFAUT. Doit rester aligne avec l'<option> de popup.html et avec
-// les DEFAULTS de content.js / popup.js.
+// MODELE UNIQUE depuis le 06.10.2026 : GLM-5.3-Flash, avec un interrupteur
+// Reflexion (`reasoning` : "low" par defaut, "full" sur demande) -- comme
+// Personal RAG (DPO-Agent) depuis le 22-24.09. Doit rester aligne avec
+// GLM_MODEL dans content.js.
 //
-// 10.08.2026 : Qwen3.6-35B-A3B remplace Kimi-K2.7-Code comme defaut, au terme
+// Mesures, 264 tickets ServiceNow, grille ancree, juge Kimi-K2.7 (epfl-scraper,
+// docs/rapport-evaluation-assistants-2026-08.md §6.11) :
+//   GLM-5.3-Flash `full`  2,41   1er mot ~41 s a 50 usagers
+//   GLM-5.3-Flash `low`   2,22   1er mot ~8 s
+//   Qwen3.6-35B           1,96   (defaut du 10.08 au 06.10.2026)
+//   Kimi-K2.7             2,41   (= GLM full : il sort du selecteur)
+//
+// Le niveau de reflexion est applique par le BACKEND (Hierarchical_search,
+// _reglage_glm5) : sur GLM, seul `reasoning_effort: "low"` coupe la reflexion ;
+// `enable_thinking: false` la deverse dans la reponse.
+//
+// Historique : 10.08.2026 : Qwen3.6-35B-A3B remplace Kimi-K2.7-Code comme defaut, au terme
 // de l'evaluation de bout en bout (epfl-scraper,
 // docs/rapport-evaluation-assistants-2026-08.md).
 //
@@ -25,12 +38,7 @@ var API_LIBRARY = "servicenow_obo";
 // La campagne des 01-02.09 avait mesure qualite, prix et latence, et OMIS la
 // disponibilite — que le rapport d'aout suivait pourtant, colonne "24/7" contre
 // "a la demande". A reconsiderer si Qwen3.8 passe en service permanent.
-var DEFAULT_MODEL = "Qwen/Qwen3.6-35B-A3B";
-
-// Modele "Large", conserve dans le selecteur pour les demandes critiques :
-// securite, donnees personnelles, procedures reglementaires, demandes VIP, et
-// rattrapage quand la reponse standard ne convient pas.
-var LARGE_MODEL = "moonshotai/Kimi-K2.7-Code";
+var DEFAULT_MODEL = "zai-org/GLM-5.3-Flash";
 
 // Modeles retires cote RCP ou ecartes par la mesure. Le choix de l'utilisateur
 // vit dans chrome.storage, donc un id retire survit a la mise a jour de
@@ -40,7 +48,12 @@ var LARGE_MODEL = "moonshotai/Kimi-K2.7-Code";
 // 2026-08-10 : Mistral-Small et gpt-oss sortent du catalogue. gpt-oss n'est pas
 //   retire parce qu'il n'est plus servi, mais parce qu'il produit une
 //   affirmation contredite par ses propres sources a chaque reponse.
+// 2026-10-06 : Qwen3.6-35B et Kimi-K2.7 sortent a leur tour (modele unique
+//   GLM-5.3-Flash). content.js envoie de toute facon GLM_MODEL sans lire le
+//   choix stocke ; ce remappage nettoie seulement le stockage.
 var RETIRED_MODELS = [
+  "Qwen/Qwen3.6-35B-A3B",
+  "moonshotai/Kimi-K2.7-Code",
   "moonshotai/Kimi-K2.6",
   "moonshotai/Kimi-K2.5",
   "mistralai/Mistral-Small-3.2-24B-Instruct-2506-bfloat16",
@@ -520,7 +533,7 @@ function precomputeForTicketWithMessages(incident, hash, previousMessages, setti
     short_description: incident.short_description || "Ticket ServiceNow",
     previous_messages: previousMessages,
     library: API_LIBRARY,
-    model: settings.model,
+    model: DEFAULT_MODEL,
     top_k: settings.topK,
     temperature: 0.3,
     rerank: settings.rerank,

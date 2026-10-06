@@ -6,11 +6,14 @@
 
   // --- API Configuration ---
   var API_LIBRARY = "large_campus2";
-  // Doit rester aligne sur DEFAULT_MODEL dans background.js et sur l'<option>
-  // selectionnee par defaut dans popup.html.
+  // Modele UNIQUE (06.10.2026), aligne sur DEFAULT_MODEL dans background.js.
+  // Envoye tel quel, SANS lire le choix stocke : un ancien choix (Qwen3.6,
+  // Kimi) ne doit pas survivre a la mise a jour. Le seul reglage offert a
+  // l'agent est le niveau de reflexion (`reasoning`, interrupteur du popup).
+  var GLM_MODEL = "zai-org/GLM-5.3-Flash";
   var DEFAULTS = {
     rerank: true,
-    model: "Qwen/Qwen3.6-35B-A3B",
+    reasoning: "low",
     topK: 10,
     indexKey: "",
   };
@@ -131,7 +134,8 @@
           short_description: context.short_description,
           previous_messages: context.previous_messages,
           library: API_LIBRARY,
-          model: settings.model,
+          model: GLM_MODEL,
+          reasoning: settings.reasoning,
           top_k: settings.topK,
           temperature: 0.3,
           rerank: settings.rerank,
@@ -253,7 +257,8 @@
           short_description: context.short_description,
           previous_messages: context.previous_messages, // écrasé côté backend via l'API journal
           library: API_LIBRARY,
-          model: settings.model,
+          model: GLM_MODEL,
+          reasoning: settings.reasoning,
           top_k: settings.topK,
           temperature: 0.3,
           rerank: settings.rerank,

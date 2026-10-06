@@ -1,16 +1,17 @@
 // popup.js — Manages plugin settings via chrome.storage
 
-// Doit rester aligne sur DEFAULT_MODEL dans background.js, sur les DEFAULTS de
-// content.js et sur la premiere <option> de popup.html.
+// Doit rester aligne sur les DEFAULTS de content.js. Plus de choix de modele
+// depuis le 06.10.2026 (GLM-5.3-Flash unique) : l'agent choisit le niveau de
+// reflexion -- "low" par defaut, "full" quand l'interrupteur est active.
 var DEFAULTS = {
   rerank: true,
-  model: "Qwen/Qwen3.6-35B-A3B",
+  reasoning: "low",
   topK: 10,
   assignmentGroup: "",
 };
 
 var rerankToggle = document.getElementById("rerank-toggle");
-var modelSelect = document.getElementById("model-select");
+var reasoningToggle = document.getElementById("reasoning-toggle");
 var topkRange = document.getElementById("topk-range");
 var topkValue = document.getElementById("topk-value");
 var assignmentGroupInput = document.getElementById("assignment-group-input");
@@ -84,7 +85,7 @@ authCopyBtn.addEventListener("click", function () {
 // Load saved settings
 chrome.storage.local.get(DEFAULTS, function (data) {
   rerankToggle.checked = data.rerank;
-  modelSelect.value = data.model;
+  reasoningToggle.checked = data.reasoning === "full";
   topkRange.value = data.topK;
   topkValue.textContent = data.topK;
   assignmentGroupInput.value = data.assignmentGroup;
@@ -95,8 +96,8 @@ rerankToggle.addEventListener("change", function () {
   chrome.storage.local.set({ rerank: rerankToggle.checked });
 });
 
-modelSelect.addEventListener("change", function () {
-  chrome.storage.local.set({ model: modelSelect.value });
+reasoningToggle.addEventListener("change", function () {
+  chrome.storage.local.set({ reasoning: reasoningToggle.checked ? "full" : "low" });
 });
 
 topkRange.addEventListener("input", function () {

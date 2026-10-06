@@ -199,12 +199,15 @@
     <label>Groupe d'affectation</label>
     <input type="text" id="assignment-group-input" placeholder="Ex: apertus">
   </div>
-  <div class="config-section">
-    <label>Modele</label>
-    <select id="model-select">
-      <option value="Qwen/Qwen3.6-35B-A3B">Standard : Qwen3.6-35B — recommandé</option>
-      <option value="moonshotai/Kimi-K2.7-Code">Large : Kimi K2.7 Code — demandes critiques</option>
-    </select>
+  <div class="toggle-row">
+    <div>
+      <label>Réflexion approfondie</label>
+      <div class="sublabel">GLM-5.3-Flash. Activée : meilleure réponse, mais premier mot plus tardif</div>
+    </div>
+    <label class="switch">
+      <input type="checkbox" id="reasoning-toggle">
+      <span class="slider"></span>
+    </label>
   </div>
   <div class="config-section">
     <label>Top K</label>
