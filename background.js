@@ -425,6 +425,8 @@ chrome.runtime.onConnect.addListener(function (port) {
 // --- Precompute orchestration ---
 
 var precomputeRunning = false;
+// Vrai apres un 401 pendant le precalcul en cours : la file a ete videe.
+var precomputeAuthFailed = false;
 
 function handlePrecomputeInit(request) {
   if (precomputeRunning) {
@@ -440,9 +442,25 @@ function handlePrecomputeInit(request) {
   chrome.storage.local.get(
     { precomputeCache: {}, apiKey: "", rerank: true, model: DEFAULT_MODEL, topK: 10, indexKey: "" },
     function (settings) {
-      // Plus de gate API key : l'auth passe par le Bearer OIDC (buildRagHeaders).
-      // Si l'utilisateur n'est pas connecté, les appels RAG renverront 401.
+      // L'auth passe par le Bearer OIDC (buildRagHeaders). Sans session, chaque
+      // ticket du groupe partait quand meme et revenait en 401 -- et comme les
+      // echecs ne sont pas mis en cache, CHAQUE chargement de la liste renvoyait
+      // toute la file : 1 798 appels en 20 h pour un seul usager, le 05-06.10.2026.
+      // On ne precalcule donc que si l'usager est connecte.
+      oidcGetIdToken().then(function (idToken) {
+        if (!idToken) {
+          console.warn("[SN AI Plugin] Precompute skipped: not signed in (OIDC)");
+          precomputeRunning = false;
+          return;
+        }
+        precomputeAuthFailed = false;
+        startPrecompute(origin, gck, assignmentGroup, settings);
+      });
+    }
+  );
+}
 
+function startPrecompute(origin, gck, assignmentGroup, settings) {
       fetchIncidents(origin, gck, assignmentGroup)
         .then(function (incidents) {
           console.log("[SN AI Plugin] ====== TICKETS FOUND: " + incidents.length + " ======");
@@ -492,8 +510,6 @@ function handlePrecomputeInit(request) {
           console.error("[SN AI Plugin] Precompute fetch error:", err);
           precomputeRunning = false;
         });
-    }
-  );
 }
 
 function precomputeForTicketWithMessages(incident, hash, previousMessages, settings) {
@@ -518,6 +534,17 @@ function precomputeForTicketWithMessages(incident, hash, previousMessages, setti
     });
   })
     .then(function (response) {
+      if (response.status === 401) {
+        // Session expiree ou refusee : inutile d'envoyer le reste de la file,
+        // tout reviendrait en 401. On la vide (les requetes deja parties
+        // finissent seules) ; le prochain chargement de la liste reessaiera.
+        if (!precomputeAuthFailed) {
+          precomputeAuthFailed = true;
+          console.warn("[SN AI Plugin] 401 from RAG API: precompute queue cleared (" +
+                       precomputeQueue.length + " tickets dropped)");
+        }
+        precomputeQueue.length = 0;
+      }
       if (!response.ok) throw new Error("RAG API error: " + response.status);
       return response.json();
     })
