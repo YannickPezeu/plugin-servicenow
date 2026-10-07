@@ -5,7 +5,7 @@
   "use strict";
 
   // --- API Configuration ---
-  var API_LIBRARY = "large_campus2";
+  var API_LIBRARY = "epfl_website_v2"; // depuis le 09.09.2026 ("large_campus2" = ancien nom, alias serveur)
   // Modele UNIQUE (06.10.2026), aligne sur DEFAULT_MODEL dans background.js.
   // Envoye tel quel, SANS lire le choix stocke : un ancien choix (Qwen3.6,
   // Kimi) ne doit pas survivre a la mise a jour. Le seul reglage offert a

@@ -135,9 +135,69 @@ function simpleHash(str) {
   return hash.toString(36);
 }
 
+// Extrait le dernier message client de l'historique pour l'utiliser comme
+// query de recherche RAG. Sans cela, le RAG cherche toujours sur le titre
+// original du ticket (ex: "numero de TVA") meme si la derniere question
+// du client porte sur un tout autre sujet (ex: "batiment INJ ferme").
+function extractLastClientQuery(messages) {
+  if (!messages || messages.length === 0) return null;
+  for (var i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].sender === "client") {
+      return messages[i].content;
+    }
+  }
+  return null;
+}
+
+// Préfixe les messages d'un ticket avec des instructions système :
+// 1) Dire au modèle de répondre au DERNIER message (sinon il répond au 1er)
+// 2) Injecter le contexte d'actualité s'il est présent
+// TODO: une fois que le backend gérera un champ `additional_context` dédié,
+// l'utiliser à la place de cette injection dans previous_messages.
+function prependSystemInstructions(messages, additionalContext) {
+  var sys =
+    "Tu es un assistant du servicedesk IT de l'EPFL. " +
+    "L'historique de conversation est en ordre chronologique (le plus ancien en premier, le plus recent en dernier). " +
+    "IMPORTANT : reponds UNIQUEMENT au DERNIER message de l'historique. " +
+    "Si le dernier message provient du client, c'est sa question ou sa demande la plus recente : reponds a celle-ci. " +
+    "Ne reponds pas aux messages precedents, ils ont deja ete traites.";
+  if (additionalContext && additionalContext.trim()) {
+    sys +=
+      "\n\n[CONTEXTE D'ACTUALITE — Information fournie par le servicedesk]\n" +
+      "Les informations ci-dessous decrivent une situation d'actualite (incident, fermeture de batiment, panne, etc.) communiquee par le servicedesk. " +
+      "Elles sont AUTORISEES et PRIORITAIRES : si le ticket concerne ce sujet, reponds directement a partir de ces informations, de facon concise et naturelle, " +
+      "comme tu le ferais avec une information evidente. " +
+      "Ne cite PAS ce contexte avec le format [N: \"phrase\"] : ce ne sont pas des passages de reference, mais une directive du servicedesk. " +
+      "Tu peux quand meme citer les passages de reference normaux si tu en utilises.\n\n" +
+      additionalContext.trim();
+  }
+  var result = [{ sender: "system", content: sys }].concat(messages || []);
+
+  // Message system FINAL : apres tout l'historique, on rappelle au modele
+  // quel message il doit traiter. Sans cela, quand il y a plusieurs questions
+  // client sans reponse entre les deux, le modele repond a une question
+  // du milieu au lieu de la derniere.
+  if (messages && messages.length > 0) {
+    var last = messages[messages.length - 1];
+    var lastSnippet = last.content.length > 120
+      ? last.content.slice(0, 120) + "..."
+      : last.content;
+    result = result.concat([{
+      sender: "system",
+      content: "=== FIN DE L'HISTORIQUE ===\n" +
+               "Tu dois repondre UNIQUEMENT au dernier message ci-dessus" +
+               (last.sender === "client" ? " (provenant du client)" : "") +
+               ". Voici son debut : \"" + lastSnippet + "\"\n" +
+               "Les messages precedents ont tous ete traites. Ne reponds a aucun d'entre eux."
+    }]);
+  }
+
+  return result;
+}
+
 // --- Precompute queue ---
 
-var PRECOMPUTE_CONCURRENCY = 20;
+var PRECOMPUTE_CONCURRENCY = 1;
 var precomputeQueue = [];
 var precomputeActive = 0;
 
@@ -221,19 +281,19 @@ function fetchJournalEntries(origin, gck, sysId) {
 // Parse un champ journal SN (display_value) en entrees individuelles.
 // Format d'une entree : "YYYY-MM-DD HH:MM:SS - Auteur (Label)\n<contenu>"
 // Les entrees sont du plus recent au plus ancien.
-function parseJournalField(text, sender) {
+function parseJournalField(text, defaultSender) {
   if (!text) return [];
-  var headerRe = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) - .*?\(.*?\)\s*$/gm;
+  var headerRe = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) - (.*?)\s*\((.*?)\)\s*$/gm;
   var heads = [];
   var m;
   while ((m = headerRe.exec(text)) !== null) {
-    heads.push({ ts: m[1], start: m.index, contentStart: headerRe.lastIndex });
+    heads.push({ ts: m[1], author: m[2].trim(), start: m.index, contentStart: headerRe.lastIndex });
   }
   var out = [];
   for (var i = 0; i < heads.length; i++) {
     var end = (i + 1 < heads.length) ? heads[i + 1].start : text.length;
     var content = text.slice(heads[i].contentStart, end).trim();
-    if (content) out.push({ ts: heads[i].ts, sender: sender, content: content });
+    if (content) out.push({ ts: heads[i].ts, author: heads[i].author, sender: defaultSender, content: content });
   }
   return out;
 }
@@ -243,7 +303,7 @@ function parseJournalField(text, sender) {
 // Retourne les messages en ordre CHRONOLOGIQUE (le plus recent en dernier).
 function fetchTicketComments(origin, gck, sysId) {
   var url = origin + "/api/now/table/incident/" + sysId +
-            "?sysparm_fields=comments,work_notes&sysparm_display_value=true";
+            "?sysparm_fields=comments,work_notes,caller_id&sysparm_display_value=true";
   return fetch(url, {
     method: "GET",
     headers: { "Accept": "application/json", "X-UserToken": gck },
@@ -255,8 +315,27 @@ function fetchTicketComments(origin, gck, sysId) {
   })
   .then(function (data) {
     var rec = data.result || {};
-    var msgs = parseJournalField(rec.comments, "client")
-      .concat(parseJournalField(rec.work_notes, "agent_support"));
+    var callerName = (rec.caller_id || "").trim().toLowerCase();
+    var comments = parseJournalField(rec.comments, "client");
+    var workNotes = parseJournalField(rec.work_notes, "agent_support");
+
+    // Re-labeliser les commentaires : dans ServiceNow, le champ "comments"
+    // contient a la fois les messages du client ET les reponses de l'agent.
+    // Tout etiqueter "client" rend le modele incapable de distinguer questions
+    // et reponses dans l'historique, ce qui le fait repondre au mauvais message.
+    // Heuristique 1 : si l'auteur != caller_id, c'est un agent.
+    // Heuristique 2 : si le contenu contient la signature "Support IT EPFL",
+    //                c'est une reponse generee par l'IA (meme si auteur = caller).
+    comments.forEach(function (e) {
+      if (callerName && e.author && e.author.toLowerCase() !== callerName) {
+        e.sender = "agent_support";
+      }
+      if (/Support\s*IT\s*EPFL/i.test(e.content)) {
+        e.sender = "agent_support";
+      }
+    });
+
+    var msgs = comments.concat(workNotes);
     msgs.sort(function (a, b) { return a.ts < b.ts ? -1 : (a.ts > b.ts ? 1 : 0); });
     return msgs.map(function (e) { return { sender: e.sender, content: e.content }; });
   });
@@ -367,12 +446,16 @@ chrome.runtime.onConnect.addListener(function (port) {
     payload.stream = true;
     var sysId = request.sysId;
 
-    chrome.storage.local.get({ apiKey: API_KEY_DEFAULT, snGck: "", snOrigin: "" }, function (settings) {
+    chrome.storage.local.get({ apiKey: API_KEY_DEFAULT, snGck: "", snOrigin: "", additionalContext: "" }, function (settings) {
       // Historique via l'API record (comme le non-stream), remplace previous_messages.
       var prep = Promise.resolve();
       if (sysId && settings.snGck && settings.snOrigin) {
         prep = fetchTicketComments(settings.snOrigin, settings.snGck, sysId)
-          .then(function (messages) { payload.previous_messages = messages; })
+          .then(function (messages) {
+            payload.previous_messages = prependSystemInstructions(messages, settings.additionalContext);
+            var lastQuery = extractLastClientQuery(messages);
+            if (lastQuery) { payload.short_description = lastQuery; payload.description = lastQuery; }
+          })
           .catch(function (e) { console.warn("[SN AI Plugin] stream: lecture comments échouée:", e); });
       }
 
@@ -453,7 +536,7 @@ function handlePrecomputeInit(request) {
   var assignmentGroup = request.assignmentGroup;
 
   chrome.storage.local.get(
-    { precomputeCache: {}, apiKey: "", rerank: true, model: DEFAULT_MODEL, topK: 10, indexKey: "" },
+    { precomputeCache: {}, apiKey: "", rerank: true, reasoning: "low", topK: 10, indexKey: "", additionalContext: "" },
     function (settings) {
       // L'auth passe par le Bearer OIDC (buildRagHeaders). Sans session, chaque
       // ticket du groupe partait quand meme et revenait en 401 -- et comme les
@@ -497,7 +580,11 @@ function startPrecompute(origin, gck, assignmentGroup, settings) {
               // Fetch journal entries first so we can compute the full hash
               return fetchTicketComments(origin, gck, incident.sys_id)
                 .then(function (previousMessages) {
-                  var fullContent = (incident.short_description || "") + "|" +
+                  previousMessages = prependSystemInstructions(previousMessages, settings.additionalContext);
+                  // Modele + reflexion dans le hash : changer l'un ou l'autre
+                  // (ex. passage Qwen3.6 -> GLM-5.3-Flash) regenere le cache.
+                  var fullContent = DEFAULT_MODEL + "|" + settings.reasoning + "|" +
+                                    (incident.short_description || "") + "|" +
                                     (incident.description || "") + "|" +
                                     previousMessages.map(function (m) { return m.content; }).join("|");
                   var hash = simpleHash(fullContent);
@@ -528,12 +615,17 @@ function startPrecompute(origin, gck, assignmentGroup, settings) {
 function precomputeForTicketWithMessages(incident, hash, previousMessages, settings) {
   console.log("[SN AI Plugin] Precomputing for", incident.sys_id, "(", incident.short_description, ")");
 
+  var lastQuery = extractLastClientQuery(previousMessages);
+  var queryDesc = lastQuery || incident.description || "";
+  var queryShort = lastQuery || incident.short_description || "Ticket ServiceNow";
+
   var payload = {
-    description: incident.description || "",
-    short_description: incident.short_description || "Ticket ServiceNow",
+    description: queryDesc,
+    short_description: queryShort,
     previous_messages: previousMessages,
     library: API_LIBRARY,
     model: DEFAULT_MODEL,
+    reasoning: settings.reasoning,
     top_k: settings.topK,
     temperature: 0.3,
     rerank: settings.rerank,
@@ -704,7 +796,7 @@ chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
 
   var payload = request.payload;
 
-  chrome.storage.local.get({ apiKey: API_KEY_DEFAULT, snGck: "", snOrigin: "" }, function (settings) {
+  chrome.storage.local.get({ apiKey: API_KEY_DEFAULT, snGck: "", snOrigin: "", additionalContext: "" }, function (settings) {
 
     // L'historique de conversation est recupere via l'API ServiceNow (fiable,
     // independant de l'UI classique/moderne) plutot que par scraping DOM cote
@@ -714,7 +806,9 @@ chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
     if (request.sysId && settings.snGck && settings.snOrigin) {
       prep = fetchTicketComments(settings.snOrigin, settings.snGck, request.sysId)
         .then(function (messages) {
-          payload.previous_messages = messages;
+          payload.previous_messages = prependSystemInstructions(messages, settings.additionalContext);
+          var lastQuery = extractLastClientQuery(messages);
+          if (lastQuery) { payload.short_description = lastQuery; payload.description = lastQuery; }
           console.log("[SN AI Plugin] on-demand: " + messages.length + " messages depuis comments/work_notes");
         })
         .catch(function (e) {

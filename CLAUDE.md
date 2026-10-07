@@ -11,7 +11,7 @@ Chrome extension (Manifest V3) that adds AI-powered response generation to Servi
 - **oidc.js** — OAuth 2.0 / OIDC PKCE flow against Microsoft Entra ID (EPFL tenant). Loaded both in the service worker (importScripts) and the popup (`<script src>`). Exposes globals `oidcSignIn / oidcSignOut / oidcGetIdToken / oidcGetUserInfo / oidcDebugDumpToken`.
 - **content.js** — Content script injected into all frames on `*.service-now.com` / `support.epfl.ch`. Handles button injection, precompute triggering, and auto-fill from cache.
 - **inject.js** — Main-world script injected via `<script>` tag. Accesses `window.g_ck` (CSRF token) and AngularJS scope for textarea value injection.
-- **popup.html / popup.js** — Settings UI. Fields: API Key, Index Key, Assignment Group, Model, Top K, Rerank toggle. Sign-in section with EPFL OIDC, plus debug buttons "Voir token (console)" and "Copier JWT".
+- **popup.html / popup.js** — Settings UI. Fields: API Key, Index Key, Assignment Group, Model, Top K, Rerank toggle, Additional Context (incident context textarea). Sign-in section with EPFL OIDC, plus debug buttons "Voir token (console)" and "Copier JWT".
 - **styles.css** — Styles for the "Generer IA" button.
 - **extension-key.pem** *(gitignored)* — RSA private key whose public half pins the extension ID. Back up safely.
 - **test_userinfo.py** *(dev-only)* — Probe script for EPFL userinfo endpoints. Reads `ID_JWT_TOKEN_TEST` and `ACCESS_JWT_TOKEN_TEST` from `.env` (gitignored).
@@ -32,6 +32,14 @@ Chrome extension (Manifest V3) that adds AI-powered response generation to Servi
 5. If hash matches cache → skip. Otherwise → call RAG API, cache response
 6. Cache stored in `chrome.storage.local.precomputeCache[sys_id]` = `{ hash, response, timestamp, shortDescription }`
 7. On ticket page load: reads cache by sys_id, auto-fills textarea after 2s delay (waits for Angular init), watches for Angular resets via MutationObserver + polling
+
+### Additional Context (Incident Context)
+
+The popup has a "Contexte d'actualite" textarea (`additionalContext` in `chrome.storage.local`). When non-empty, its content is prepended to `previous_messages` as a `{ sender: "system", content: "[CONTEXTE D'ACTUALITE]\n..." }` entry before every RAG API call. This lets the servicedesk broadcast time-sensitive info (building closure, accident, outage) that the model should consider when answering all tickets.
+
+The injection happens in `prependSystemInstructions()` in [background.js](background.js), called from all three RAG paths: streaming on-demand, non-streaming on-demand, and precompute. This function **always** prepends a system message (even without additional context) that instructs the model to respond to the **last** message in the conversation history — without this, the model tends to answer the first or a middle message instead of the most recent one. In the precompute path, the system message + context are included in the cache hash, so changing either invalidates cached responses on the next precompute run.
+
+**TODO:** Once the backend supports a dedicated `additional_context` payload field, switch from `previous_messages` injection to that field to avoid the message being formatted as a chat turn.
 
 ### Concurrency
 `PRECOMPUTE_CONCURRENCY` in background.js controls parallel RAG API calls. Default: 1 (sequential). Set to 20 for load testing. The API at `lex-chatbot.epfl.ch` is sensitive to high concurrency.

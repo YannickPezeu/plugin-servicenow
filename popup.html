@@ -59,6 +59,17 @@
     .config-section input:disabled {
       background-color: #f5f5f5;
     }
+    .config-section textarea {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 4px 8px;
+      font-size: 12px;
+      border: 1px solid #ccc;
+      border-radius: 3px;
+      resize: vertical;
+      font-family: inherit;
+      line-height: 1.4;
+    }
     .config-section select {
       width: 100%;
       box-sizing: border-box;
@@ -225,6 +236,14 @@
       <input type="checkbox" id="rerank-toggle" checked>
       <span class="slider"></span>
     </label>
+  </div>
+  <hr>
+  <div class="config-section">
+    <label>Contexte d'actualité</label>
+    <div class="sublabel" style="font-size: 10px; font-weight: 400; color: #888; margin-bottom: 4px;">
+      Info d'incident (fermeture, accident…) transmise à l'IA pour toutes les réponses. Laisser vide si aucun contexte.
+    </div>
+    <textarea id="additional-context-input" rows="4" placeholder="Ex: Le bâtiment INJ est fermé jusqu'à 15h suite à une fuite d'eau. Rediriger les demandes vers le bâtiment INR."></textarea>
   </div>
   <script src="oidc.js"></script>
   <script src="popup.js"></script>

@@ -8,6 +8,7 @@ var DEFAULTS = {
   reasoning: "low",
   topK: 10,
   assignmentGroup: "",
+  additionalContext: "",
 };
 
 var rerankToggle = document.getElementById("rerank-toggle");
@@ -15,6 +16,7 @@ var reasoningToggle = document.getElementById("reasoning-toggle");
 var topkRange = document.getElementById("topk-range");
 var topkValue = document.getElementById("topk-value");
 var assignmentGroupInput = document.getElementById("assignment-group-input");
+var additionalContextInput = document.getElementById("additional-context-input");
 var authBtn = document.getElementById("auth-btn");
 var authUser = document.getElementById("auth-user");
 var authError = document.getElementById("auth-error");
@@ -89,6 +91,7 @@ chrome.storage.local.get(DEFAULTS, function (data) {
   topkRange.value = data.topK;
   topkValue.textContent = data.topK;
   assignmentGroupInput.value = data.assignmentGroup;
+  additionalContextInput.value = data.additionalContext;
 });
 
 // Save on change
@@ -107,4 +110,8 @@ topkRange.addEventListener("input", function () {
 
 assignmentGroupInput.addEventListener("input", function () {
   chrome.storage.local.set({ assignmentGroup: assignmentGroupInput.value });
+});
+
+additionalContextInput.addEventListener("input", function () {
+  chrome.storage.local.set({ additionalContext: additionalContextInput.value });
 });
