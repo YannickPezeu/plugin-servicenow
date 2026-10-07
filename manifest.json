@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ServiceNow AI Response Generator",
-  "version": "1.3.1",
+  "version": "1.3.2",
   "description": "Ajoute un bouton 'Générer IA' dans les tickets ServiceNow pour proposer des réponses automatiques via RAG.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAkTPlCFgooxN+RJ2c5GVYfvvm+QFJ3WDj4awOzfwenu+cIJstuNmvBkIKE4VlwyAJIb5EyJjM2JEkCq099EWXTUUzj8194xDl4zMTOI06MIIuFGMMVnIzB6RDseGrCHQHD7wHjbVaz0TfXa3SvestRYn1SvZGbda1mfcOsIV/odxOiFa61L0BRL1mW5ektnJd69EP7vEJjrEcguAFqh/m7Mvs1CDT8BTmDLdrh4QhigKUA27TktiDcCwcIexqarrFJATmK157lJm/cJqy2NXsV8BaMCHKPQtp9lICwGa/6k6w459cB1Ie/Pr3mpYv5we86JNyh3JKzPpjCs5gnJSPVQIDAQAB",
   "permissions": ["activeTab", "storage", "alarms", "identity"],

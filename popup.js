@@ -3,18 +3,15 @@
 // Doit rester aligne sur les DEFAULTS de content.js. Plus de choix de modele
 // depuis le 06.10.2026 (GLM-5.3-Flash unique) : l'agent choisit le niveau de
 // reflexion -- "low" par defaut, "full" quand l'interrupteur est active.
+// top_k et rerank ne sont plus reglables (07.10.2026), cf. TOP_K / RERANK dans
+// background.js.
 var DEFAULTS = {
-  rerank: true,
   reasoning: "low",
-  topK: 10,
   assignmentGroup: "",
   additionalContext: "",
 };
 
-var rerankToggle = document.getElementById("rerank-toggle");
 var reasoningToggle = document.getElementById("reasoning-toggle");
-var topkRange = document.getElementById("topk-range");
-var topkValue = document.getElementById("topk-value");
 var assignmentGroupInput = document.getElementById("assignment-group-input");
 var additionalContextInput = document.getElementById("additional-context-input");
 var authBtn = document.getElementById("auth-btn");
@@ -86,26 +83,14 @@ authCopyBtn.addEventListener("click", function () {
 
 // Load saved settings
 chrome.storage.local.get(DEFAULTS, function (data) {
-  rerankToggle.checked = data.rerank;
   reasoningToggle.checked = data.reasoning === "full";
-  topkRange.value = data.topK;
-  topkValue.textContent = data.topK;
   assignmentGroupInput.value = data.assignmentGroup;
   additionalContextInput.value = data.additionalContext;
 });
 
 // Save on change
-rerankToggle.addEventListener("change", function () {
-  chrome.storage.local.set({ rerank: rerankToggle.checked });
-});
-
 reasoningToggle.addEventListener("change", function () {
   chrome.storage.local.set({ reasoning: reasoningToggle.checked ? "full" : "low" });
-});
-
-topkRange.addEventListener("input", function () {
-  topkValue.textContent = topkRange.value;
-  chrome.storage.local.set({ topK: parseInt(topkRange.value, 10) });
 });
 
 assignmentGroupInput.addEventListener("input", function () {

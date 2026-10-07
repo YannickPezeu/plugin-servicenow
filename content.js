@@ -11,10 +11,12 @@
   // Kimi) ne doit pas survivre a la mise a jour. Le seul reglage offert a
   // l'agent est le niveau de reflexion (`reasoning`, interrupteur du popup).
   var GLM_MODEL = "zai-org/GLM-5.3-Flash";
+  // top_k / rerank fixes, alignes sur TOP_K / RERANK dans background.js (et sur
+  // Personal RAG) : plus reglables depuis le 07.10.2026.
+  var TOP_K = 10;
+  var RERANK = true;
   var DEFAULTS = {
-    rerank: true,
     reasoning: "low",
-    topK: 10,
     indexKey: "",
   };
 
@@ -122,7 +124,7 @@
     }
 
     return new Promise(function (resolve, reject) {
-      // Read rerank setting from storage
+      // Read settings from storage
       chrome.storage.local.get(DEFAULTS, function (settings) {
         if (chrome.runtime.lastError || isContextInvalidated()) {
           reject(new Error(CONTEXT_INVALIDATED_MSG));
@@ -136,9 +138,9 @@
           library: API_LIBRARY,
           model: GLM_MODEL,
           reasoning: settings.reasoning,
-          top_k: settings.topK,
+          top_k: TOP_K,
           temperature: 0.3,
-          rerank: settings.rerank,
+          rerank: RERANK,
         };
 
         chrome.runtime.sendMessage(
@@ -259,9 +261,9 @@
           library: API_LIBRARY,
           model: GLM_MODEL,
           reasoning: settings.reasoning,
-          top_k: settings.topK,
+          top_k: TOP_K,
           temperature: 0.3,
-          rerank: settings.rerank,
+          rerank: RERANK,
         };
 
         var port = chrome.runtime.connect({ name: "rag-stream" });

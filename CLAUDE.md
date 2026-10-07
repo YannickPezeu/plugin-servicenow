@@ -11,7 +11,7 @@ Chrome extension (Manifest V3) that adds AI-powered response generation to Servi
 - **oidc.js** — OAuth 2.0 / OIDC PKCE flow against Microsoft Entra ID (EPFL tenant). Loaded both in the service worker (importScripts) and the popup (`<script src>`). Exposes globals `oidcSignIn / oidcSignOut / oidcGetIdToken / oidcGetUserInfo / oidcDebugDumpToken`.
 - **content.js** — Content script injected into all frames on `*.service-now.com` / `support.epfl.ch`. Handles button injection, precompute triggering, and auto-fill from cache.
 - **inject.js** — Main-world script injected via `<script>` tag. Accesses `window.g_ck` (CSRF token) and AngularJS scope for textarea value injection.
-- **popup.html / popup.js** — Settings UI. Fields: API Key, Index Key, Assignment Group, Model, Top K, Rerank toggle, Additional Context (incident context textarea). Sign-in section with EPFL OIDC, plus debug buttons "Voir token (console)" and "Copier JWT".
+- **popup.html / popup.js** — Settings UI. Fields: API Key, Index Key, Assignment Group, Reasoning toggle (`reasoning` low/full, GLM-5.3-Flash is the only model), Additional Context (incident context textarea). `top_k` (10) and `rerank` (on) are fixed constants (`TOP_K` / `RERANK` in background.js and content.js), not user settings — same values as Personal RAG. Sign-in section with EPFL OIDC, plus debug buttons "Voir token (console)" and "Copier JWT".
 - **styles.css** — Styles for the "Generer IA" button.
 - **extension-key.pem** *(gitignored)* — RSA private key whose public half pins the extension ID. Back up safely.
 - **test_userinfo.py** *(dev-only)* — Probe script for EPFL userinfo endpoints. Reads `ID_JWT_TOKEN_TEST` and `ACCESS_JWT_TOKEN_TEST` from `.env` (gitignored).

@@ -40,6 +40,16 @@ var API_LIBRARY = "servicenow_obo";
 // "a la demande". A reconsiderer si Qwen3.8 passe en service permanent.
 var DEFAULT_MODEL = "zai-org/GLM-5.3-Flash";
 
+// Recherche : top_k 10 et rerank actif, NON reglables (07.10.2026), comme
+// Personal RAG (DPO-Agent, extension/src/state/config.ts, v9 ; et
+// api/epflHybrid.ts). 10 est la valeur retenue par le banc ServiceNow du
+// 03.08.2026 (epfl-scraper/docs/rapport-benchmarks-2026-08.md) : au-dela, aucun
+// gain mesurable et 2,6x les jetons. Un reglage dont l'agent ne peut pas
+// mesurer l'effet donne deux comportements a deux agents sans que rien ne
+// l'indique.
+var TOP_K = 10;
+var RERANK = true;
+
 // Modeles retires cote RCP ou ecartes par la mesure. Le choix de l'utilisateur
 // vit dans chrome.storage, donc un id retire survit a la mise a jour de
 // l'extension et fait echouer — ou pire, reussir avec un mauvais modele — tous
@@ -61,6 +71,8 @@ var RETIRED_MODELS = [
 ];
 
 chrome.runtime.onInstalled.addListener(function () {
+  // Anciens reglages du popup, retires le 07.10.2026 (cf. TOP_K / RERANK).
+  chrome.storage.local.remove(["topK", "rerank"]);
   chrome.storage.local.get({ model: "" }, function (data) {
     if (data.model && RETIRED_MODELS.indexOf(data.model) !== -1) {
       chrome.storage.local.set({ model: DEFAULT_MODEL }, function () {
@@ -536,7 +548,7 @@ function handlePrecomputeInit(request) {
   var assignmentGroup = request.assignmentGroup;
 
   chrome.storage.local.get(
-    { precomputeCache: {}, apiKey: "", rerank: true, reasoning: "low", topK: 10, indexKey: "", additionalContext: "" },
+    { precomputeCache: {}, apiKey: "", reasoning: "low", indexKey: "", additionalContext: "" },
     function (settings) {
       // L'auth passe par le Bearer OIDC (buildRagHeaders). Sans session, chaque
       // ticket du groupe partait quand meme et revenait en 401 -- et comme les
@@ -626,9 +638,9 @@ function precomputeForTicketWithMessages(incident, hash, previousMessages, setti
     library: API_LIBRARY,
     model: DEFAULT_MODEL,
     reasoning: settings.reasoning,
-    top_k: settings.topK,
+    top_k: TOP_K,
     temperature: 0.3,
-    rerank: settings.rerank,
+    rerank: RERANK,
   };
 
   return buildRagHeaders(settings.apiKey).then(function (headers) {
