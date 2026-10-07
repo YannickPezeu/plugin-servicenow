@@ -11,8 +11,13 @@
   // Kimi) ne doit pas survivre a la mise a jour. Le seul reglage offert a
   // l'agent est le niveau de reflexion (`reasoning`, interrupteur du popup).
   var GLM_MODEL = "zai-org/GLM-5.3-Flash";
-  // top_k / rerank fixes, alignes sur TOP_K / RERANK dans background.js (et sur
-  // Personal RAG) : plus reglables depuis le 07.10.2026.
+  // Recherche : top_k 10 et rerank actif, NON reglables (07.10.2026), comme
+  // Personal RAG (DPO-Agent, extension/src/state/config.ts, v9 ; et
+  // api/epflHybrid.ts). 10 est la valeur retenue par le banc ServiceNow du
+  // 03.08.2026 (epfl-scraper/docs/rapport-benchmarks-2026-08.md) : au-dela, aucun
+  // gain mesurable et 2,6x les jetons. Un reglage dont l'agent ne peut pas
+  // mesurer l'effet donne deux comportements a deux agents sans que rien ne
+  // l'indique.
   var TOP_K = 10;
   var RERANK = true;
   var DEFAULTS = {
@@ -23,7 +28,6 @@
   var INJECT_SCRIPT_LOADED = false;
   var BOXES_INJECTED = new Set();
   var PROPOSITION_HOSTS = new Map(); // textareaId -> host element
-  var precomputeTriggered = false;
 
   // Textarea configurations — IDs of the SN textareas we anchor below.
   var TEXTAREA_CONFIGS = [
@@ -172,8 +176,6 @@
       var cache = data.precomputeCache;
       var prev = cache[sysId] || {};
       cache[sysId] = {
-        // Hash is "manual" so the next periodic precompute will re-fetch and
-        // overwrite with the up-to-date hash from background.
         hash: "manual",
         response: result.text,
         sources: result.sources,
@@ -349,7 +351,7 @@
     });
   }
 
-  // --- Precompute: trigger from top frame ---
+  // --- Frame detection ---
 
   function getSysIdFromUrl() {
     var match = window.location.search.match(/sys_id=([a-f0-9]{32})/);
@@ -367,103 +369,22 @@
     href: window.location.href.substring(0, 120),
   });
 
-  // Signal background on every SN page navigation (background handles debounce)
-  if (!isContextInvalidated()) {
-    chrome.runtime.sendMessage({ type: "sn-page-loaded" }, function () {
-      if (chrome.runtime.lastError) { /* ignore */ }
-    });
-  }
-
-  // Top frame: inject script immediately to capture g_ck, add precompute button
+  // Top frame: inject script immediately to capture g_ck
   if (isTopFrame) {
     injectMainWorldScript();
 
-    function triggerPrecompute() {
-      var gck = document.documentElement.getAttribute("data-sn-ai-gck");
-      if (!gck) {
-        console.warn("[SN AI Plugin] g_ck not found on page");
-        return;
-      }
-
-      if (isContextInvalidated()) {
-        console.warn("[SN AI Plugin] Extension context invalidated");
-        return;
-      }
-
-      chrome.storage.local.get({ assignmentGroup: "" }, function (settings) {
-        if (chrome.runtime.lastError) {
-          console.error("[SN AI Plugin] Storage error:", chrome.runtime.lastError);
-          return;
-        }
-        if (!settings.assignmentGroup) {
-          console.warn("[SN AI Plugin] No assignment group configured");
-          updatePrecomputeButton("no-group");
-          return;
-        }
-
-        console.log("[SN AI Plugin] Precompute triggered for group:", settings.assignmentGroup);
-        updatePrecomputeButton("loading");
-
-        chrome.runtime.sendMessage({
-          type: "precompute-init",
-          gck: gck,
-          origin: window.location.origin,
-          assignmentGroup: settings.assignmentGroup,
-        }, function (response) {
-          if (chrome.runtime.lastError) {
-            console.error("[SN AI Plugin] Message error:", chrome.runtime.lastError);
-            updatePrecomputeButton("error");
-          } else {
-            console.log("[SN AI Plugin] Precompute init response:", response);
-            updatePrecomputeButton("done");
-          }
-        });
-      });
-    }
-
-    // Auto-trigger when g_ck is available
+    // Persiste g_ck + origin : le background en a besoin pour lire l'historique
+    // du ticket (fetchTicketComments) au moment de la generation.
     document.addEventListener("sn-ai-gck", function () {
-      // Persist g_ck + origin for background periodic precompute
       var gck = document.documentElement.getAttribute("data-sn-ai-gck");
       if (gck && !isContextInvalidated()) {
         chrome.storage.local.set({
           snGck: gck,
           snOrigin: window.location.origin,
-          snGckTimestamp: Date.now(),
         });
-        console.log("[SN AI Plugin] g_ck persisted for background precompute");
+        console.log("[SN AI Plugin] g_ck persisted");
       }
-
-      if (precomputeTriggered) return;
-      precomputeTriggered = true;
-      triggerPrecompute();
     });
-
-    // Precompute button in top frame
-    function updatePrecomputeButton(state) {
-      var btn = document.getElementById("sn-ai-precompute-btn");
-      if (!btn) return;
-      if (state === "loading") {
-        btn.textContent = "Precompute...";
-        btn.style.backgroundColor = "#f0ad4e";
-        btn.disabled = true;
-      } else if (state === "done") {
-        btn.textContent = "Precompute OK";
-        btn.style.backgroundColor = "#5cb85c";
-        btn.disabled = false;
-      } else if (state === "error") {
-        btn.textContent = "Precompute ERR";
-        btn.style.backgroundColor = "#d9534f";
-        btn.disabled = false;
-      } else if (state === "no-group") {
-        btn.textContent = "Pas de groupe";
-        btn.style.backgroundColor = "#d9534f";
-        btn.disabled = false;
-      }
-    }
-
-    // Bouton flottant de précompute retiré (debug). Le précompute s'auto-déclenche
-    // via l'événement `sn-ai-gck` ci-dessus — pas besoin d'UI visible.
   }
 
   // --- Proposition box injection (runs in ticket iframes) ---

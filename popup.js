@@ -7,12 +7,10 @@
 // background.js.
 var DEFAULTS = {
   reasoning: "low",
-  assignmentGroup: "",
   additionalContext: "",
 };
 
 var reasoningToggle = document.getElementById("reasoning-toggle");
-var assignmentGroupInput = document.getElementById("assignment-group-input");
 var additionalContextInput = document.getElementById("additional-context-input");
 var authBtn = document.getElementById("auth-btn");
 var authUser = document.getElementById("auth-user");
@@ -84,17 +82,12 @@ authCopyBtn.addEventListener("click", function () {
 // Load saved settings
 chrome.storage.local.get(DEFAULTS, function (data) {
   reasoningToggle.checked = data.reasoning === "full";
-  assignmentGroupInput.value = data.assignmentGroup;
   additionalContextInput.value = data.additionalContext;
 });
 
 // Save on change
 reasoningToggle.addEventListener("change", function () {
   chrome.storage.local.set({ reasoning: reasoningToggle.checked ? "full" : "low" });
-});
-
-assignmentGroupInput.addEventListener("input", function () {
-  chrome.storage.local.set({ assignmentGroup: assignmentGroupInput.value });
 });
 
 additionalContextInput.addEventListener("input", function () {

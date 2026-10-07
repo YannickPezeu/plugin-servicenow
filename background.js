@@ -40,16 +40,6 @@ var API_LIBRARY = "servicenow_obo";
 // "a la demande". A reconsiderer si Qwen3.8 passe en service permanent.
 var DEFAULT_MODEL = "zai-org/GLM-5.3-Flash";
 
-// Recherche : top_k 10 et rerank actif, NON reglables (07.10.2026), comme
-// Personal RAG (DPO-Agent, extension/src/state/config.ts, v9 ; et
-// api/epflHybrid.ts). 10 est la valeur retenue par le banc ServiceNow du
-// 03.08.2026 (epfl-scraper/docs/rapport-benchmarks-2026-08.md) : au-dela, aucun
-// gain mesurable et 2,6x les jetons. Un reglage dont l'agent ne peut pas
-// mesurer l'effet donne deux comportements a deux agents sans que rien ne
-// l'indique.
-var TOP_K = 10;
-var RERANK = true;
-
 // Modeles retires cote RCP ou ecartes par la mesure. Le choix de l'utilisateur
 // vit dans chrome.storage, donc un id retire survit a la mise a jour de
 // l'extension et fait echouer — ou pire, reussir avec un mauvais modele — tous
@@ -71,8 +61,11 @@ var RETIRED_MODELS = [
 ];
 
 chrome.runtime.onInstalled.addListener(function () {
-  // Anciens reglages du popup, retires le 07.10.2026 (cf. TOP_K / RERANK).
+  // Anciens reglages du popup, retires le 07.10.2026 (cf. TOP_K / RERANK, content.js).
   chrome.storage.local.remove(["topK", "rerank"]);
+  // Precalcul retire le 07.10.2026 (groupe d'affectation, alarme 15 min,
+  // declenchement a la navigation) : ses cles ne servent plus.
+  chrome.storage.local.remove(["assignmentGroup", "snGckTimestamp"]);
   chrome.storage.local.get({ model: "" }, function (data) {
     if (data.model && RETIRED_MODELS.indexOf(data.model) !== -1) {
       chrome.storage.local.set({ model: DEFAULT_MODEL }, function () {
@@ -87,8 +80,6 @@ chrome.runtime.onInstalled.addListener(function () {
 // `[N: "verbatim quote"]` citation format that this extension parses.
 
 // --- Shared utilities ---
-
-var CACHE_SCHEMA_VERSION = 2;
 
 function buildResponsePayload(answer, sources) {
   var list = Array.isArray(sources) ? sources : [];
@@ -135,16 +126,6 @@ function buildRagHeaders(apiKey) {
     if (idToken) headers["Authorization"] = "Bearer " + idToken;
     return headers;
   });
-}
-
-function simpleHash(str) {
-  var hash = 0;
-  for (var i = 0; i < str.length; i++) {
-    var chr = str.charCodeAt(i);
-    hash = ((hash << 5) - hash) + chr;
-    hash |= 0;
-  }
-  return hash.toString(36);
 }
 
 // Extrait le dernier message client de l'historique pour l'utiliser comme
@@ -207,62 +188,7 @@ function prependSystemInstructions(messages, additionalContext) {
   return result;
 }
 
-// --- Precompute queue ---
-
-var PRECOMPUTE_CONCURRENCY = 1;
-var precomputeQueue = [];
-var precomputeActive = 0;
-
-function processPrecomputeQueue() {
-  while (precomputeActive < PRECOMPUTE_CONCURRENCY && precomputeQueue.length > 0) {
-    var task = precomputeQueue.shift();
-    precomputeActive++;
-    task().finally(function () {
-      precomputeActive--;
-      processPrecomputeQueue();
-      // Clear keepalive alarm when queue is drained
-      if (precomputeActive === 0 && precomputeQueue.length === 0) {
-        precomputeRunning = false;
-        chrome.alarms.clear("precompute-keepalive");
-        console.log("[SN AI Plugin] Precompute complete, keepalive cleared");
-      }
-    });
-  }
-}
-
-function enqueuePrecompute(fn) {
-  precomputeQueue.push(fn);
-  processPrecomputeQueue();
-}
-
 // --- ServiceNow REST API ---
-
-function fetchIncidents(origin, gck, assignmentGroup) {
-  var query = "assignment_group.nameLIKE" + assignmentGroup +
-              "^stateNOT IN6,7";
-  var fields = "sys_id,short_description,description";
-  var url = origin + "/api/now/table/incident" +
-            "?sysparm_query=" + encodeURIComponent(query) +
-            "&sysparm_fields=" + encodeURIComponent(fields) +
-            "&sysparm_display_value=true" +
-            "&sysparm_limit=50";
-
-  return fetch(url, {
-    method: "GET",
-    headers: {
-      "Accept": "application/json",
-      "X-UserToken": gck,
-    },
-    credentials: "include",
-  })
-  .then(function (r) {
-    if (!r.ok) throw new Error("SN API error: " + r.status);
-    return r.json();
-  })
-  .then(function (data) {
-    return data.result || [];
-  });
-}
 
 function fetchJournalEntries(origin, gck, sysId) {
   var url = origin + "/api/now/table/sys_journal_field" +
@@ -530,170 +456,6 @@ chrome.runtime.onConnect.addListener(function (port) {
   });
 });
 
-// --- Precompute orchestration ---
-
-var precomputeRunning = false;
-// Vrai apres un 401 pendant le precalcul en cours : la file a ete videe.
-var precomputeAuthFailed = false;
-
-function handlePrecomputeInit(request) {
-  if (precomputeRunning) {
-    console.warn("[SN AI Plugin] Precompute already running, ignoring duplicate call");
-    return;
-  }
-  precomputeRunning = true;
-
-  var gck = request.gck;
-  var origin = request.origin;
-  var assignmentGroup = request.assignmentGroup;
-
-  chrome.storage.local.get(
-    { precomputeCache: {}, apiKey: "", reasoning: "low", indexKey: "", additionalContext: "" },
-    function (settings) {
-      // L'auth passe par le Bearer OIDC (buildRagHeaders). Sans session, chaque
-      // ticket du groupe partait quand meme et revenait en 401 -- et comme les
-      // echecs ne sont pas mis en cache, CHAQUE chargement de la liste renvoyait
-      // toute la file : 1 798 appels en 20 h pour un seul usager, le 05-06.10.2026.
-      // On ne precalcule donc que si l'usager est connecte.
-      oidcGetIdToken().then(function (idToken) {
-        if (!idToken) {
-          console.warn("[SN AI Plugin] Precompute skipped: not signed in (OIDC)");
-          precomputeRunning = false;
-          return;
-        }
-        precomputeAuthFailed = false;
-        startPrecompute(origin, gck, assignmentGroup, settings);
-      });
-    }
-  );
-}
-
-function startPrecompute(origin, gck, assignmentGroup, settings) {
-      fetchIncidents(origin, gck, assignmentGroup)
-        .then(function (incidents) {
-          console.log("[SN AI Plugin] ====== TICKETS FOUND: " + incidents.length + " ======");
-          incidents.forEach(function (inc, i) {
-            console.log("[SN AI Plugin]   " + (i + 1) + ". " + inc.sys_id + " | " + (inc.short_description || "(no title)"));
-          });
-
-          var cache = settings.precomputeCache;
-
-          console.log("[SN AI Plugin] ====== QUEUING " + incidents.length + " tickets for hash check ======");
-
-          // Start keepalive alarm
-          chrome.alarms.create("precompute-keepalive", { periodInMinutes: 0.4 });
-
-          var totalQueued = incidents.length;
-          var skippedCount = 0;
-          var processedCount = 0;
-
-          incidents.forEach(function (incident, idx) {
-            enqueuePrecompute(function () {
-              // Fetch journal entries first so we can compute the full hash
-              return fetchTicketComments(origin, gck, incident.sys_id)
-                .then(function (previousMessages) {
-                  previousMessages = prependSystemInstructions(previousMessages, settings.additionalContext);
-                  // Modele + reflexion dans le hash : changer l'un ou l'autre
-                  // (ex. passage Qwen3.6 -> GLM-5.3-Flash) regenere le cache.
-                  var fullContent = DEFAULT_MODEL + "|" + settings.reasoning + "|" +
-                                    (incident.short_description || "") + "|" +
-                                    (incident.description || "") + "|" +
-                                    previousMessages.map(function (m) { return m.content; }).join("|");
-                  var hash = simpleHash(fullContent);
-
-                  var cached = cache[incident.sys_id];
-                  if (cached && cached.hash === hash && cached.schemaVersion === CACHE_SCHEMA_VERSION) {
-                    skippedCount++;
-                    console.log("[SN AI Plugin] SKIP (cached) " + (idx + 1) + "/" + totalQueued + " | " + incident.short_description);
-                    return;
-                  }
-
-                  processedCount++;
-                  console.log("[SN AI Plugin] >>> RAG START " + (idx + 1) + "/" + totalQueued + " | " + incident.short_description);
-                  return precomputeForTicketWithMessages(incident, hash, previousMessages, settings);
-                })
-                .then(function () {
-                  console.log("[SN AI Plugin] <<< DONE " + (idx + 1) + "/" + totalQueued + " | " + incident.short_description);
-                });
-            });
-          });
-        })
-        .catch(function (err) {
-          console.error("[SN AI Plugin] Precompute fetch error:", err);
-          precomputeRunning = false;
-        });
-}
-
-function precomputeForTicketWithMessages(incident, hash, previousMessages, settings) {
-  console.log("[SN AI Plugin] Precomputing for", incident.sys_id, "(", incident.short_description, ")");
-
-  var lastQuery = extractLastClientQuery(previousMessages);
-  var queryDesc = lastQuery || incident.description || "";
-  var queryShort = lastQuery || incident.short_description || "Ticket ServiceNow";
-
-  var payload = {
-    description: queryDesc,
-    short_description: queryShort,
-    previous_messages: previousMessages,
-    library: API_LIBRARY,
-    model: DEFAULT_MODEL,
-    reasoning: settings.reasoning,
-    top_k: TOP_K,
-    temperature: 0.3,
-    rerank: RERANK,
-  };
-
-  return buildRagHeaders(settings.apiKey).then(function (headers) {
-    return fetch(API_URL, {
-      method: "POST",
-      headers: headers,
-      body: JSON.stringify(payload),
-    });
-  })
-    .then(function (response) {
-      if (response.status === 401) {
-        // Session expiree ou refusee : inutile d'envoyer le reste de la file,
-        // tout reviendrait en 401. On la vide (les requetes deja parties
-        // finissent seules) ; le prochain chargement de la liste reessaiera.
-        if (!precomputeAuthFailed) {
-          precomputeAuthFailed = true;
-          console.warn("[SN AI Plugin] 401 from RAG API: precompute queue cleared (" +
-                       precomputeQueue.length + " tickets dropped)");
-        }
-        precomputeQueue.length = 0;
-      }
-      if (!response.ok) throw new Error("RAG API error: " + response.status);
-      return response.json();
-    })
-    .then(function (data) {
-      var answer = data.answer || data.response || data.message ||
-                   data.text || data.content ||
-                   (typeof data === "string" ? data : JSON.stringify(data));
-      var built = buildResponsePayload(answer, data.sources);
-
-      return new Promise(function (resolve) {
-        chrome.storage.local.get({ precomputeCache: {} }, function (stored) {
-          var cache = stored.precomputeCache;
-          cache[incident.sys_id] = {
-            hash: hash,
-            response: built.text,
-            sources: built.sources,
-            schemaVersion: CACHE_SCHEMA_VERSION,
-            timestamp: Date.now(),
-            shortDescription: incident.short_description,
-          };
-          chrome.storage.local.set({ precomputeCache: cache }, function () {
-            console.log("[SN AI Plugin] Cached response for", incident.sys_id, "(" + built.sources.length + " sources)");
-            resolve();
-          });
-        });
-      });
-    })
-    .catch(function (err) {
-      console.error("[SN AI Plugin] Precompute failed for", incident.sys_id, ":", err);
-    });
-}
-
 // --- Cache eviction (remove entries older than 7 days) ---
 
 function evictOldCacheEntries() {
@@ -719,91 +481,9 @@ function evictOldCacheEntries() {
 
 evictOldCacheEntries();
 
-// --- Periodic precompute (runs from background without user on SN page) ---
-
-var PRECOMPUTE_INTERVAL_MINUTES = 15;
-var GCK_MAX_AGE_MS = 8 * 60 * 60 * 1000; // 8 hours — assume session expired after this
-
-chrome.alarms.create("precompute-periodic", { periodInMinutes: PRECOMPUTE_INTERVAL_MINUTES });
-console.log("[SN AI Plugin] Periodic precompute alarm set every " + PRECOMPUTE_INTERVAL_MINUTES + " min");
-
-function handlePeriodicPrecompute() {
-  if (precomputeRunning) {
-    console.log("[SN AI Plugin] Periodic: precompute already running, skipping");
-    return;
-  }
-
-  chrome.storage.local.get(
-    { snGck: "", snOrigin: "", snGckTimestamp: 0, assignmentGroup: "", apiKey: "" },
-    function (data) {
-      if (!data.snGck || !data.snOrigin) {
-        console.log("[SN AI Plugin] Periodic: no stored g_ck/origin, skipping (visit a SN page first)");
-        return;
-      }
-      if (!data.assignmentGroup) {
-        console.log("[SN AI Plugin] Periodic: no assignment group configured, skipping");
-        return;
-      }
-      if (Date.now() - data.snGckTimestamp > GCK_MAX_AGE_MS) {
-        console.log("[SN AI Plugin] Periodic: g_ck too old (" +
-          Math.round((Date.now() - data.snGckTimestamp) / 3600000) + "h), skipping");
-        return;
-      }
-
-      console.log("[SN AI Plugin] Periodic precompute triggered for group:", data.assignmentGroup);
-      handlePrecomputeInit({
-        gck: data.snGck,
-        origin: data.snOrigin,
-        assignmentGroup: data.assignmentGroup,
-      });
-    }
-  );
-}
-
-// --- Alarm handler ---
-
-chrome.alarms.onAlarm.addListener(function (alarm) {
-  if (alarm.name === "precompute-keepalive") {
-    console.log("[SN AI Plugin] Keepalive: active=" + precomputeActive + " queued=" + precomputeQueue.length);
-  }
-  if (alarm.name === "precompute-periodic") {
-    handlePeriodicPrecompute();
-  }
-});
-
-// --- Navigation-triggered precompute (debounced) ---
-
-var PRECOMPUTE_COOLDOWN_MS = 2 * 60 * 1000; // 2 minutes minimum between triggers
-var lastPrecomputeTrigger = 0;
-
-function handlePageLoaded() {
-  var now = Date.now();
-  if (now - lastPrecomputeTrigger < PRECOMPUTE_COOLDOWN_MS) {
-    console.log("[SN AI Plugin] Navigation trigger debounced (" +
-      Math.round((now - lastPrecomputeTrigger) / 1000) + "s since last)");
-    return;
-  }
-  lastPrecomputeTrigger = now;
-  console.log("[SN AI Plugin] Navigation detected, triggering precompute check");
-  handlePeriodicPrecompute();
-}
-
 // --- Message handler ---
 
 chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
-  if (request.type === "sn-page-loaded") {
-    handlePageLoaded();
-    sendResponse({ ok: true });
-    return false;
-  }
-
-  if (request.type === "precompute-init") {
-    lastPrecomputeTrigger = Date.now(); // reset cooldown on manual trigger too
-    handlePrecomputeInit(request);
-    sendResponse({ ok: true });
-    return false;
-  }
-
   if (request.type !== "rag-generate") return false;
 
   var payload = request.payload;

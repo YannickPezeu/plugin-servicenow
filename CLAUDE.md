@@ -6,12 +6,12 @@ Chrome extension (Manifest V3) that adds AI-powered response generation to Servi
 ## Architecture
 
 ### Files
-- **manifest.json** — MV3 manifest. Permissions: `activeTab`, `storage`, `alarms`, `identity`. Host permissions for `lex-chatbot.epfl.ch`, `support.epfl.ch`, `login.microsoftonline.com`. Contains a `key` field that pins the extension ID to `alkbalieeodmgfcejfjdpdomlalbojom` (paired with `extension-key.pem`, gitignored).
-- **background.js** — Service worker. Proxies RAG API calls (bypasses CORS), orchestrates precompute pipeline, manages cache eviction, handles periodic/navigation-triggered precompute. `importScripts("oidc.js")` for shared auth helpers.
+- **manifest.json** — MV3 manifest. Permissions: `activeTab`, `storage`, `identity`. Host permissions for `lex-chatbot.epfl.ch`, `support.epfl.ch`, `login.microsoftonline.com`. Contains a `key` field that pins the extension ID to `alkbalieeodmgfcejfjdpdomlalbojom` (paired with `extension-key.pem`, gitignored).
+- **background.js** — Service worker. Proxies RAG API calls (bypasses CORS), reads the ticket history via the SN REST API, evicts old cache entries. `importScripts("oidc.js")` for shared auth helpers.
 - **oidc.js** — OAuth 2.0 / OIDC PKCE flow against Microsoft Entra ID (EPFL tenant). Loaded both in the service worker (importScripts) and the popup (`<script src>`). Exposes globals `oidcSignIn / oidcSignOut / oidcGetIdToken / oidcGetUserInfo / oidcDebugDumpToken`.
-- **content.js** — Content script injected into all frames on `*.service-now.com` / `support.epfl.ch`. Handles button injection, precompute triggering, and auto-fill from cache.
+- **content.js** — Content script injected into all frames on `*.service-now.com` / `support.epfl.ch`. Handles the proposition box injection, captures `g_ck`, and re-displays the last generated answer from cache.
 - **inject.js** — Main-world script injected via `<script>` tag. Accesses `window.g_ck` (CSRF token) and AngularJS scope for textarea value injection.
-- **popup.html / popup.js** — Settings UI. Fields: API Key, Index Key, Assignment Group, Reasoning toggle (`reasoning` low/full, GLM-5.3-Flash is the only model), Additional Context (incident context textarea). `top_k` (10) and `rerank` (on) are fixed constants (`TOP_K` / `RERANK` in background.js and content.js), not user settings — same values as Personal RAG. Sign-in section with EPFL OIDC, plus debug buttons "Voir token (console)" and "Copier JWT".
+- **popup.html / popup.js** — Settings UI. Fields: API Key, Index Key, Reasoning toggle (`reasoning` low/full, GLM-5.3-Flash is the only model), Additional Context (incident context textarea). `top_k` (10) and `rerank` (on) are fixed constants (`TOP_K` / `RERANK` in content.js), not user settings — same values as Personal RAG. Sign-in section with EPFL OIDC, plus debug buttons "Voir token (console)" and "Copier JWT".
 - **styles.css** — Styles for the "Generer IA" button.
 - **extension-key.pem** *(gitignored)* — RSA private key whose public half pins the extension ID. Back up safely.
 - **test_userinfo.py** *(dev-only)* — Probe script for EPFL userinfo endpoints. Reads `ID_JWT_TOKEN_TEST` and `ACCESS_JWT_TOKEN_TEST` from `.env` (gitignored).
@@ -24,25 +24,20 @@ Chrome extension (Manifest V3) that adds AI-powered response generation to Servi
 
 **AngularJS scope injection**: To set textarea values in SN, `inject.js` uses `angular.element(textarea).scope().$apply()` to write to the scope field (`activity_field_0.value`). Fallback: direct `.value` + input/change/blur events.
 
-### Precompute Pipeline
-1. `g_ck` captured from any SN page visit, persisted to `chrome.storage.local`
-2. Triggered by: manual button, page navigation (debounced 2min), or periodic alarm (every 15min)
-3. Fetches incidents via SN REST API filtered by assignment group + non-closed state
-4. For each ticket: fetches journal entries, computes hash of `short_description|description|messages`
-5. If hash matches cache → skip. Otherwise → call RAG API, cache response
-6. Cache stored in `chrome.storage.local.precomputeCache[sys_id]` = `{ hash, response, timestamp, shortDescription }`
-7. On ticket page load: reads cache by sys_id, auto-fills textarea after 2s delay (waits for Angular init), watches for Angular resets via MutationObserver + polling
+### Generation (on demand only)
+1. `g_ck` captured from any SN page visit, persisted to `chrome.storage.local` (`snGck`, `snOrigin`)
+2. Agent clicks "Generer" in the proposition box → background reads comments + work notes via the SN REST API (`fetchTicketComments`), calls the RAG API (streaming)
+3. The answer is cached in `chrome.storage.local.precomputeCache[sys_id]` (name kept for compatibility) and re-displayed on the next page load; entries older than 7 days are evicted
+
+**Precompute removed (07.10.2026, 1.4.0).** The pipeline that pre-generated answers for every open ticket of an assignment group (navigation trigger + 15-min alarm) is gone, along with the "Groupe d'affectation" field and the `alarms` permission. It lives in git history (last version: `3202d3d`) if ever needed again.
 
 ### Additional Context (Incident Context)
 
 The popup has a "Contexte d'actualite" textarea (`additionalContext` in `chrome.storage.local`). When non-empty, its content is prepended to `previous_messages` as a `{ sender: "system", content: "[CONTEXTE D'ACTUALITE]\n..." }` entry before every RAG API call. This lets the servicedesk broadcast time-sensitive info (building closure, accident, outage) that the model should consider when answering all tickets.
 
-The injection happens in `prependSystemInstructions()` in [background.js](background.js), called from all three RAG paths: streaming on-demand, non-streaming on-demand, and precompute. This function **always** prepends a system message (even without additional context) that instructs the model to respond to the **last** message in the conversation history — without this, the model tends to answer the first or a middle message instead of the most recent one. In the precompute path, the system message + context are included in the cache hash, so changing either invalidates cached responses on the next precompute run.
+The injection happens in `prependSystemInstructions()` in [background.js](background.js), called from both RAG paths: streaming and non-streaming. This function **always** prepends a system message (even without additional context) that instructs the model to respond to the **last** message in the conversation history — without this, the model tends to answer the first or a middle message instead of the most recent one.
 
 **TODO:** Once the backend supports a dedicated `additional_context` payload field, switch from `previous_messages` injection to that field to avoid the message being formatted as a chat turn.
-
-### Concurrency
-`PRECOMPUTE_CONCURRENCY` in background.js controls parallel RAG API calls. Default: 1 (sequential). Set to 20 for load testing. The API at `lex-chatbot.epfl.ch` is sensitive to high concurrency.
 
 ### Authentication & Authorization
 
@@ -84,9 +79,8 @@ There is also a more restrictive variant at `https://api.epfl.ch/entra-api/v1/oi
 **Debug helpers.** The popup has two buttons that target the local console: "Voir token (console)" dumps both tokens + decoded claims via `oidcDebugDumpToken()`, "Copier JWT" copies the ID token to clipboard. Useful for jwt.ms inspection and for backend-side testing without re-running the full sign-in.
 
 ### Known Issues / Gotchas
-- `g_ck` expires with the SN session. Background precompute checks token age (max 8h).
+- `g_ck` expires with the SN session; it is refreshed on every SN page visit.
 - Auto-fill can be reset by SN's Angular digest cycle — MutationObserver + polling re-applies up to 3 times.
-- `precomputeRunning` flag prevents duplicate precompute runs but resets only when queue is fully drained.
 - Sending the **access token** (vs ID token) to any non-Graph endpoint returns `invalid token signature`. Always use `oidcGetIdToken()`, never `oidcAccessToken` directly, for RAG and EPFL APIs.
 - The custom claims provider is attached to the registration (`app_displayname` no longer contains `(Failed to add custom provider)`) but still doesn't emit `accreds` in the token. The userinfo endpoint is the supported workaround — don't waste time trying to fix the in-token claim.
 - **A silent SSE stream kills the streaming path.** Chrome terminates an MV3 service worker after 30s of inactivity, and *reading bytes from a `fetch` does not count as activity* — only a `chrome.*` API call or an incoming event resets the timer. When the worker dies the port closes and `content.js` shows "Connexion interrompue." with no error anywhere. Measured 03.09.2026: Qwen3.6 emits its first `content` delta after **30.5s** of reasoning on an ordinary ticket. Two guards, keep both: `startKeepalive()` in [background.js](background.js) pings `chrome.runtime.getPlatformInfo()` every 20s, and the backend relays reasoning as `reasoning_chunk` SSE events so the pipe is never quiet.
@@ -95,8 +89,8 @@ There is also a more restrictive variant at `https://api.epfl.ch/entra-api/v1/oi
 - The `groups` claim in the ID token contains only **app-assigned** Entra groups (1 entry today), filtered server-side. The user's actual group memberships (~40 groups) are accessible via Graph `/me/memberOf` or via the EPFL userinfo `groups` array (which uses named groups like `personnel-epfl`, not GUIDs). Don't conflate the two.
 
 ## Development
-- Branch `feature/precompute-responses` has the precompute feature
+- Branch `feature/precompute-responses` is the working branch (name is historical: precompute was removed in 1.4.0)
 - Branch `master` has the base extension (button + single RAG call)
 - Test on `support.epfl.ch` (EPFL's ServiceNow instance)
 - Debug: Chrome DevTools on the service worker (chrome://extensions) and on the SN page (F12)
-- To clear precompute cache: `chrome.storage.local.remove("precomputeCache")` in service worker console
+- To clear the answer cache: `chrome.storage.local.remove("precomputeCache")` in service worker console
