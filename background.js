@@ -481,6 +481,30 @@ function evictOldCacheEntries() {
 
 evictOldCacheEntries();
 
+// --- Connexion OIDC ---
+// Le flux tourne ici et non dans le popup : quand la fenetre Microsoft prend le
+// focus, Chrome ferme le popup et tue son JS, le code n'etait jamais echange.
+// Le keepalive couvre le temps passe par l'utilisateur dans la fenetre (> 30s).
+// Une erreur est gardee dans oidcSignInError pour que le popup rouvert l'affiche.
+
+chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
+  if (request.type !== "oidc-sign-in") return false;
+
+  var keepalive = startKeepalive();
+  chrome.storage.local.remove("oidcSignInError");
+  oidcSignIn()
+    .then(function () { sendResponse({ success: true }); })
+    .catch(function (err) {
+      var msg = err.message || String(err);
+      console.warn("[SN AI Plugin] connexion OIDC echouee:", msg);
+      chrome.storage.local.set({ oidcSignInError: msg });
+      sendResponse({ success: false, error: msg });
+    })
+    .finally(function () { clearInterval(keepalive); });
+
+  return true;
+});
+
 // --- Message handler ---
 
 chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {

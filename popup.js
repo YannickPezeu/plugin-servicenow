@@ -40,11 +40,32 @@ function showAuthError(msg) {
 }
 
 oidcGetUserInfo().then(renderAuth);
+chrome.storage.local.get({ oidcSignInError: "" }, function (data) {
+  if (data.oidcSignInError) showAuthError("Connexion échouée : " + data.oidcSignInError);
+});
+
+// La connexion se termine souvent popup ferme : on suit le stockage plutot
+// que la reponse du message.
+chrome.storage.onChanged.addListener(function (changes, area) {
+  if (area !== "local") return;
+  if (changes.oidcUser) renderAuth(changes.oidcUser.newValue);
+  if (changes.oidcSignInError && changes.oidcSignInError.newValue) {
+    showAuthError("Connexion échouée : " + changes.oidcSignInError.newValue);
+  }
+});
+
+// Le flux OIDC tourne dans le service worker (cf. background.js) : lance
+// depuis le popup, il mourait avec lui des que la fenetre Microsoft s'ouvrait.
+function signInViaBackground() {
+  return chrome.runtime.sendMessage({ type: "oidc-sign-in" }).then(function (res) {
+    if (!res || !res.success) throw new Error((res && res.error) || "Connexion échouée");
+  });
+}
 
 authBtn.addEventListener("click", function () {
   showAuthError("");
   authBtn.disabled = true;
-  var action = signedIn ? oidcSignOut() : oidcSignIn();
+  var action = signedIn ? oidcSignOut() : signInViaBackground();
   action
     .then(function () { return oidcGetUserInfo(); })
     .then(renderAuth)
