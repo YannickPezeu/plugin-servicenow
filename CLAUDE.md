@@ -31,6 +31,14 @@ Chrome extension (Manifest V3) that adds AI-powered response generation to Servi
 
 **Precompute removed (07.10.2026, 1.4.0).** The pipeline that pre-generated answers for every open ticket of an assignment group (navigation trigger + 15-min alarm) is gone, along with the "Groupe d'affectation" field and the `alarms` permission. It lives in git history (last version: `3202d3d`) if ever needed again.
 
+### Usage logs & agent feedback (1.5.0)
+
+Every generation is logged on the shared usage page **personal-rag.epfl.ch/usage** (same page as Personal RAG and the Outlook add-in), as app `servicenow`:
+- `content.js` sends `generation_id` (UUID) and `ticket_number` (DOM `incident.number`) with each request; `background.js` overrides the number with the one read from the SN REST API (`fetchTicketComments` returns `{messages, number}`). Both must match `REF_RE` or they're dropped — the backend 422s otherwise.
+- The **backend** (Hierarchical_search, `usage_report.py`) counts the tokens of both LLM calls and pushes the record to `/usage/ingest`. The ingest token stays server-side: never call personal-rag from the extension.
+- Under a finished answer, a feedback panel (right of the answer, `proposition-box.js`, outside `.sn-ai-proposition-body` so copy never includes it): 👍/👎 required, "Temps gagné estimé (min)" (0–480) and comment optional. Sent via `{type: "rag-feedback"}` → `POST /rag/servicenow/feedback` (Bearer OIDC required). The last feedback is kept in the cache entry (`feedback`) and can be modified; the page keeps the latest per `generation_id`.
+- Public level of the page: counts only. Ticket numbers and comments appear only at the detail level (`USAGE_ADMINS`).
+
 ### Additional Context (Incident Context)
 
 The popup has a "Contexte d'actualite" textarea (`additionalContext` in `chrome.storage.local`). When non-empty, its content is prepended to `previous_messages` as a `{ sender: "system", content: "[CONTEXTE D'ACTUALITE]\n..." }` entry before every RAG API call. This lets the servicedesk broadcast time-sensitive info (building closure, accident, outage) that the model should consider when answering all tickets.
@@ -79,7 +87,7 @@ There is also a more restrictive variant at `https://api.epfl.ch/entra-api/v1/oi
 **Debug helpers.** The popup has two buttons that target the local console: "Voir token (console)" dumps both tokens + decoded claims via `oidcDebugDumpToken()`, "Copier JWT" copies the ID token to clipboard. Useful for jwt.ms inspection and for backend-side testing without re-running the full sign-in.
 
 ### Known Issues / Gotchas
-- **Never run `launchWebAuthFlow` from the popup.** The Microsoft window takes focus, Chrome closes the popup and kills its JS, so the code is never exchanged and sign-in silently does nothing (it only "works" with the popup's DevTools open). The popup sends `{type: "oidc-sign-in"}` to the service worker, which runs `oidcSignIn()` under `startKeepalive()`; the popup follows `oidcUser` / `oidcSignInError` via `chrome.storage.onChanged`.
+- **Never run `launchWebAuthFlow` from the popup.** The Microsoft window takes focus, Chrome closes the popup and kills its JS, so the code is never exchanged and sign-in silently does nothing. Seen on macOS (20.10.2026, fixed in 1.4.1); on Windows the popup survived, so testing there doesn't catch it. The popup sends `{type: "oidc-sign-in"}` to the service worker, which runs `oidcSignIn()` under `startKeepalive()`; the popup follows `oidcUser` / `oidcSignInError` via `chrome.storage.onChanged`.
 - `g_ck` expires with the SN session; it is refreshed on every SN page visit.
 - Auto-fill can be reset by SN's Angular digest cycle — MutationObserver + polling re-applies up to 3 times.
 - Sending the **access token** (vs ID token) to any non-Graph endpoint returns `invalid token signature`. Always use `oidcGetIdToken()`, never `oidcAccessToken` directly, for RAG and EPFL APIs.

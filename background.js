@@ -3,6 +3,14 @@
 importScripts("oidc.js");
 
 var API_URL = "https://hierarchical-search.epfl.ch/rag/servicenow/generate";
+// Retours des agents (pouce, temps gagne, commentaire) : relayes par le backend
+// a la page d'usage de Personal RAG (personal-rag.epfl.ch/usage), avec les
+// jetons et le n° de ticket de chaque generation. Le jeton d'ingestion reste
+// cote serveur, d'ou ce detour.
+var FEEDBACK_URL = "https://hierarchical-search.epfl.ch/rag/servicenow/feedback";
+// Meme motif que REF_PATTERN cote backend : un n° hors motif ferait refuser
+// (422) toute la generation, on prefere ne pas l'envoyer.
+var REF_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/;
 var API_KEY_DEFAULT = "";
 // Ignoré par /rag/servicenow/generate (source imposée : site + KB ServiceNow OBO),
 // gardé pour le champ `library_used`/logs côté backend.
@@ -147,13 +155,22 @@ function extractLastClientQuery(messages) {
 // 2) Injecter le contexte d'actualité s'il est présent
 // TODO: une fois que le backend gérera un champ `additional_context` dédié,
 // l'utiliser à la place de cette injection dans previous_messages.
+// Ces instructions, le contexte d'actualite et la KB sont en francais : sans
+// consigne explicite, le modele repondait en francais a un ticket en anglais.
+// Repetee dans le message final, le plus proche de la reponse.
+var LANGUAGE_RULE =
+  "LANGUE : reponds dans la langue du dernier message du client (en anglais s'il est en anglais), " +
+  "meme si ces instructions et les documents de reference sont en francais. " +
+  "Reply in the language of the client's last message.";
+
 function prependSystemInstructions(messages, additionalContext) {
   var sys =
     "Tu es un assistant du servicedesk IT de l'EPFL. " +
     "L'historique de conversation est en ordre chronologique (le plus ancien en premier, le plus recent en dernier). " +
     "IMPORTANT : reponds UNIQUEMENT au DERNIER message de l'historique. " +
     "Si le dernier message provient du client, c'est sa question ou sa demande la plus recente : reponds a celle-ci. " +
-    "Ne reponds pas aux messages precedents, ils ont deja ete traites.";
+    "Ne reponds pas aux messages precedents, ils ont deja ete traites. " +
+    LANGUAGE_RULE;
   if (additionalContext && additionalContext.trim()) {
     sys +=
       "\n\n[CONTEXTE D'ACTUALITE — Information fournie par le servicedesk]\n" +
@@ -181,7 +198,8 @@ function prependSystemInstructions(messages, additionalContext) {
                "Tu dois repondre UNIQUEMENT au dernier message ci-dessus" +
                (last.sender === "client" ? " (provenant du client)" : "") +
                ". Voici son debut : \"" + lastSnippet + "\"\n" +
-               "Les messages precedents ont tous ete traites. Ne reponds a aucun d'entre eux."
+               "Les messages precedents ont tous ete traites. Ne reponds a aucun d'entre eux.\n" +
+               LANGUAGE_RULE
     }]);
   }
 
@@ -238,10 +256,11 @@ function parseJournalField(text, defaultSender) {
 
 // Recupere l'historique du ticket via les champs comments/work_notes du record
 // incident (display_value) — l'API table/sys_journal_field est bloquee par ACL.
-// Retourne les messages en ordre CHRONOLOGIQUE (le plus recent en dernier).
+// Retourne { messages, number } : les messages en ordre CHRONOLOGIQUE (le plus
+// recent en dernier) et le n° du ticket (INC…), pour la page d'usage.
 function fetchTicketComments(origin, gck, sysId) {
   var url = origin + "/api/now/table/incident/" + sysId +
-            "?sysparm_fields=comments,work_notes,caller_id&sysparm_display_value=true";
+            "?sysparm_fields=number,comments,work_notes,caller_id&sysparm_display_value=true";
   return fetch(url, {
     method: "GET",
     headers: { "Accept": "application/json", "X-UserToken": gck },
@@ -275,8 +294,18 @@ function fetchTicketComments(origin, gck, sysId) {
 
     var msgs = comments.concat(workNotes);
     msgs.sort(function (a, b) { return a.ts < b.ts ? -1 : (a.ts > b.ts ? 1 : 0); });
-    return msgs.map(function (e) { return { sender: e.sender, content: e.content }; });
+    return {
+      messages: msgs.map(function (e) { return { sender: e.sender, content: e.content }; }),
+      number: (rec.number || "").trim(),
+    };
   });
+}
+
+// N° de ticket du record SN s'il est propre, sinon celui lu dans le DOM par
+// content.js ; jamais une valeur que le backend refuserait.
+function applyTicketNumber(payload, number) {
+  if (number && REF_RE.test(number)) payload.ticket_number = number;
+  if (payload.ticket_number && !REF_RE.test(payload.ticket_number)) delete payload.ticket_number;
 }
 
 // --- Streaming SSE (affichage token par token, chemin à la demande) ---
@@ -389,15 +418,19 @@ chrome.runtime.onConnect.addListener(function (port) {
       var prep = Promise.resolve();
       if (sysId && settings.snGck && settings.snOrigin) {
         prep = fetchTicketComments(settings.snOrigin, settings.snGck, sysId)
-          .then(function (messages) {
+          .then(function (ticket) {
+            var messages = ticket.messages;
             payload.previous_messages = prependSystemInstructions(messages, settings.additionalContext);
             var lastQuery = extractLastClientQuery(messages);
             if (lastQuery) { payload.short_description = lastQuery; payload.description = lastQuery; }
+            applyTicketNumber(payload, ticket.number);
           })
           .catch(function (e) { console.warn("[SN AI Plugin] stream: lecture comments échouée:", e); });
       }
 
       prep.then(function () {
+        applyTicketNumber(payload, "");
+        if (payload.generation_id && !REF_RE.test(payload.generation_id)) delete payload.generation_id;
         buildRagHeaders(settings.apiKey).then(function (headers) {
           if (!headers["Authorization"] && !settings.apiKey) {
             port.postMessage({ type: "error", error: "Non connecté : ouvre le popup et connecte-toi (OIDC)." });
@@ -505,6 +538,42 @@ chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
   return true;
 });
 
+// --- Retour de l'agent sur une proposition ---
+// payload : { generation_id, ticket_number?, rating: "up"|"down",
+//             time_saved_min?, comment?, model? }. Bearer OIDC obligatoire.
+
+chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
+  if (request.type !== "rag-feedback") return false;
+
+  chrome.storage.local.get({ apiKey: API_KEY_DEFAULT }, function (settings) {
+    buildRagHeaders(settings.apiKey)
+      .then(function (headers) {
+        if (!headers["Authorization"]) {
+          throw new Error("Non connecté : ouvre le popup et connecte-toi (OIDC) pour envoyer un retour.");
+        }
+        return fetch(FEEDBACK_URL, {
+          method: "POST",
+          headers: headers,
+          body: JSON.stringify(request.payload),
+        });
+      })
+      .then(function (r) {
+        if (!r.ok) {
+          return r.text().then(function (b) {
+            throw new Error("Retour non enregistré (" + r.status + ")" + (b ? " : " + b.substring(0, 160) : ""));
+          });
+        }
+        sendResponse({ success: true });
+      })
+      .catch(function (err) {
+        console.warn("[SN AI Plugin] retour non envoyé:", err);
+        sendResponse({ success: false, error: err.message || String(err) });
+      });
+  });
+
+  return true;
+});
+
 // --- Message handler ---
 
 chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
@@ -521,7 +590,9 @@ chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
     var prep = Promise.resolve();
     if (request.sysId && settings.snGck && settings.snOrigin) {
       prep = fetchTicketComments(settings.snOrigin, settings.snGck, request.sysId)
-        .then(function (messages) {
+        .then(function (ticket) {
+          var messages = ticket.messages;
+          applyTicketNumber(payload, ticket.number);
           payload.previous_messages = prependSystemInstructions(messages, settings.additionalContext);
           var lastQuery = extractLastClientQuery(messages);
           if (lastQuery) { payload.short_description = lastQuery; payload.description = lastQuery; }

@@ -170,7 +170,9 @@
 
   // --- Save a manually-generated response into the cache (so refresh keeps it) ---
 
-  function saveResultToCache(sysId, result, shortDescription) {
+  // `generationId` / `ticketNumber` : rattachent le retour de l'agent à la
+  // génération affichée, même après un rechargement de la page.
+  function saveResultToCache(sysId, result, shortDescription, generationId, ticketNumber) {
     if (!sysId) return;
     chrome.storage.local.get({ precomputeCache: {} }, function (data) {
       var cache = data.precomputeCache;
@@ -182,9 +184,64 @@
         schemaVersion: 2,
         timestamp: Date.now(),
         shortDescription: prev.shortDescription || shortDescription || "",
+        generationId: generationId || "",
+        ticketNumber: ticketNumber || "",
       };
       chrome.storage.local.set({ precomputeCache: cache });
     });
+  }
+
+  // --- Retour de l'agent (pouce, temps gagné, commentaire) ---
+
+  // Le dernier retour envoyé est gardé dans l'entrée de cache : à la
+  // réouverture du ticket, le panneau le réaffiche au lieu d'un formulaire vide.
+  function rememberFeedback(sysId, generationId, feedback) {
+    if (!sysId) return;
+    chrome.storage.local.get({ precomputeCache: {} }, function (data) {
+      var entry = data.precomputeCache[sysId];
+      if (!entry || entry.generationId !== generationId) return;
+      entry.feedback = feedback;
+      chrome.storage.local.set({ precomputeCache: data.precomputeCache });
+    });
+  }
+
+  function sendFeedback(sysId, generationId, ticketNumber, fb) {
+    return new Promise(function (resolve, reject) {
+      if (isContextInvalidated()) { reject(new Error(CONTEXT_INVALIDATED_MSG)); return; }
+      var payload = { generation_id: generationId, rating: fb.rating, model: GLM_MODEL };
+      if (ticketNumber) payload.ticket_number = ticketNumber;
+      if (typeof fb.timeSavedMin === "number") payload.time_saved_min = fb.timeSavedMin;
+      if (fb.comment) payload.comment = fb.comment;
+      chrome.runtime.sendMessage({ type: "rag-feedback", payload: payload }, function (response) {
+        if (chrome.runtime.lastError) { reject(new Error(chrome.runtime.lastError.message)); return; }
+        if (response && response.success) {
+          rememberFeedback(sysId, generationId, fb);
+          resolve();
+        } else {
+          reject(new Error((response && response.error) || "Pas de réponse"));
+        }
+      });
+    });
+  }
+
+  function feedbackOptions(sysId, generationId, ticketNumber, previous) {
+    if (!generationId) return null;
+    return {
+      previous: previous || null,
+      onSubmit: function (fb) { return sendFeedback(sysId, generationId, ticketNumber, fb); },
+    };
+  }
+
+  function newGenerationId() {
+    if (window.crypto && typeof window.crypto.randomUUID === "function") return window.crypto.randomUUID();
+    return Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 12);
+  }
+
+  // N° du ticket lu dans le formulaire (le background le remplace par celui de
+  // l'API SN quand il peut la lire).
+  function getTicketNumberFromDom() {
+    var n = getFieldValue(["incident.number", "sys_readonly.incident.number"]);
+    return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/.test(n) ? n : "";
   }
 
   // --- Inject the autonomous "Proposition IA" box below a textarea ---
@@ -244,6 +301,8 @@
       if (isContextInvalidated()) return;
       inFlight = true;
       var opts = { onGenerate: onGenerate };
+      var generationId = newGenerationId();
+      var ticketNumber = getTicketNumberFromDom();
       window.SnAiPropositionBox.beginStream(host, opts);
 
       var context = extractTicketContext();
@@ -266,7 +325,10 @@
           top_k: TOP_K,
           temperature: 0.3,
           rerank: RERANK,
+          // Page d'usage : relie l'appel, son ticket et le retour de l'agent.
+          generation_id: generationId,
         };
+        if (ticketNumber) payload.ticket_number = ticketNumber;
 
         var port = chrome.runtime.connect({ name: "rag-stream" });
         var fullText = "";
@@ -298,8 +360,10 @@
             finished = true;
             inFlight = false;
             if (fullText.trim()) {
+              opts.feedback = feedbackOptions(sysId, generationId, ticketNumber, null);
               window.SnAiPropositionBox.finishStream(host, fullText, sources, opts);
-              saveResultToCache(sysId, { text: fullText, sources: sources }, context.short_description);
+              saveResultToCache(sysId, { text: fullText, sources: sources }, context.short_description,
+                generationId, ticketNumber);
             } else {
               window.SnAiPropositionBox.setEmpty(host, opts);
             }
@@ -327,7 +391,11 @@
           window.SnAiPropositionBox.render(host, {
             text: cached.response,
             sources: cached.sources,
-          }, { onGenerate: onGenerate });
+          }, {
+            onGenerate: onGenerate,
+            // Réponses en cache d'avant 1.5.0 : pas d'id de génération, pas de panneau.
+            feedback: feedbackOptions(sysId, cached.generationId, cached.ticketNumber || getTicketNumberFromDom(), cached.feedback),
+          });
           console.log("[SN AI Plugin] Proposition rendered from cache for", sysId,
             "| sources:", cached.sources.length);
         } else {

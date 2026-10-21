@@ -1,6 +1,7 @@
 // proposition-box.js — Box "Proposition IA" affichée sous la textarea SN.
 // Rendue en markdown avec citations [N] cliquables qui ouvrent la modal source.
 // Expose window.SnAiPropositionBox = { render(host, data), setLoading(host), setEmpty(host), setError(host, msg) }
+// `options.feedback` ({ onSubmit(fb) → Promise, previous }) : panneau de retour à droite de la réponse.
 
 (function () {
   "use strict";
@@ -222,11 +223,17 @@
 
     box.appendChild(reasoning);
 
-    // Body (state-dependent)
+    // Body (state-dependent) + panneau de retour à sa droite. Le panneau est
+    // HORS du body : la copie (clone du body) ne doit jamais l'emporter.
+    var main = document.createElement("div");
+    main.className = "sn-ai-proposition-main";
     var body = document.createElement("div");
     body.className = "sn-ai-proposition-body markdown";
     installCitationDelegation(body);
-    box.appendChild(body);
+    main.appendChild(body);
+    var feedback = buildFeedbackPanel();
+    main.appendChild(feedback);
+    box.appendChild(main);
 
     // Status footer (optional, for transient messages)
     var status = document.createElement("div");
@@ -238,7 +245,7 @@
 
     return {
       box: box, generateBtn: generateBtn, copyBtn: copyBtn,
-      body: body, status: status, log: log, reasoning: reasoning,
+      body: body, status: status, log: log, reasoning: reasoning, feedback: feedback,
     };
   }
 
@@ -253,7 +260,184 @@
       status: box.querySelector(".sn-ai-proposition-status"),
       log: box.querySelector(".sn-ai-proposition-log"),
       reasoning: box.querySelector(".sn-ai-proposition-reasoning"),
+      feedback: box.querySelector(".sn-ai-feedback"),
     };
+  }
+
+  // --- Panneau de retour : 👍/👎 (obligatoire), temps gagné et commentaire
+  // (facultatifs). Envoyé à la page d'usage via le backend (background.js). ---
+
+  function buildFeedbackPanel() {
+    var panel = document.createElement("aside");
+    panel.className = "sn-ai-feedback";
+    panel.style.display = "none";
+    panel.setAttribute("aria-label", "Votre avis sur la proposition");
+
+    var title = document.createElement("div");
+    title.className = "sn-ai-feedback-title";
+    title.textContent = "Votre avis sur cette réponse";
+    panel.appendChild(title);
+
+    var thumbs = document.createElement("div");
+    thumbs.className = "sn-ai-feedback-thumbs";
+    [["up", "👍", "Réponse utile"], ["down", "👎", "Réponse pas utile"]].forEach(function (t) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "sn-ai-feedback-thumb";
+      b.dataset.rating = t[0];
+      b.title = t[2];
+      b.setAttribute("aria-label", t[2]);
+      b.setAttribute("aria-pressed", "false");
+      b.textContent = t[1];
+      thumbs.appendChild(b);
+    });
+    panel.appendChild(thumbs);
+
+    var timeLabel = document.createElement("label");
+    timeLabel.className = "sn-ai-feedback-label";
+    timeLabel.textContent = "Temps gagné estimé (min)";
+    var time = document.createElement("input");
+    time.type = "number";
+    time.min = "0";
+    time.max = "480";
+    time.step = "1";
+    time.inputMode = "numeric";
+    time.placeholder = "facultatif";
+    time.className = "sn-ai-feedback-time";
+    timeLabel.appendChild(time);
+    panel.appendChild(timeLabel);
+
+    var commentLabel = document.createElement("label");
+    commentLabel.className = "sn-ai-feedback-label";
+    commentLabel.textContent = "Commentaire";
+    var comment = document.createElement("textarea");
+    comment.className = "sn-ai-feedback-comment";
+    comment.rows = 4;
+    comment.maxLength = 1000;
+    comment.placeholder = "Facultatif. Ce qui manque, ce qui est faux… Pas de données personnelles.";
+    commentLabel.appendChild(comment);
+    panel.appendChild(commentLabel);
+
+    var send = document.createElement("button");
+    send.type = "button";
+    send.className = "sn-ai-feedback-send";
+    send.textContent = "Envoyer";
+    send.disabled = true;
+    panel.appendChild(send);
+
+    var status = document.createElement("div");
+    status.className = "sn-ai-feedback-status";
+    status.setAttribute("role", "status");
+    panel.appendChild(status);
+
+    // Les touches tapées ici ne doivent pas remonter aux raccourcis clavier de SN.
+    [time, comment].forEach(function (input) {
+      input.addEventListener("keydown", function (e) { e.stopPropagation(); });
+    });
+
+    thumbs.addEventListener("click", function (e) {
+      var b = e.target.closest(".sn-ai-feedback-thumb");
+      if (!b) return;
+      setRating(panel, b.dataset.rating);
+      panel._snDirty = true;
+      refreshSendState(panel);
+    });
+    [time, comment].forEach(function (input) {
+      input.addEventListener("input", function () { panel._snDirty = true; refreshSendState(panel); });
+    });
+    send.addEventListener("click", function () { submitFeedback(panel); });
+    return panel;
+  }
+
+  function setRating(panel, rating) {
+    panel._snRating = rating || null;
+    panel.querySelectorAll(".sn-ai-feedback-thumb").forEach(function (b) {
+      b.setAttribute("aria-pressed", String(b.dataset.rating === rating));
+    });
+  }
+
+  function readTime(panel) {
+    var raw = panel.querySelector(".sn-ai-feedback-time").value.trim();
+    if (raw === "") return { ok: true, value: null };
+    var n = Number(raw);
+    if (!Number.isInteger(n) || n < 0 || n > 480) return { ok: false };
+    return { ok: true, value: n };
+  }
+
+  function refreshSendState(panel) {
+    var send = panel.querySelector(".sn-ai-feedback-send");
+    var status = panel.querySelector(".sn-ai-feedback-status");
+    var time = readTime(panel);
+    if (!time.ok) {
+      status.textContent = "Temps gagné : un nombre entier de 0 à 480 minutes.";
+      status.className = "sn-ai-feedback-status sn-ai-feedback-error";
+    } else if (panel._snDirty && status.classList.contains("sn-ai-feedback-error")) {
+      status.textContent = "";
+      status.className = "sn-ai-feedback-status";
+    }
+    send.disabled = panel._snSending || !panel._snRating || !time.ok || !panel._snDirty;
+  }
+
+  function submitFeedback(panel) {
+    var opts = panel._snOptions;
+    var time = readTime(panel);
+    if (!opts || !panel._snRating || !time.ok) return;
+    var fb = {
+      rating: panel._snRating,
+      timeSavedMin: time.value,
+      comment: panel.querySelector(".sn-ai-feedback-comment").value.trim(),
+    };
+    var send = panel.querySelector(".sn-ai-feedback-send");
+    var status = panel.querySelector(".sn-ai-feedback-status");
+    panel._snSending = true;
+    refreshSendState(panel);
+    status.className = "sn-ai-feedback-status";
+    status.textContent = "Envoi…";
+    Promise.resolve(opts.onSubmit(fb)).then(function () {
+      panel._snSent = true;
+      panel._snDirty = false;
+      status.textContent = "Merci, votre retour est enregistré.";
+      send.textContent = "Modifier le retour";
+    }, function (err) {
+      status.className = "sn-ai-feedback-status sn-ai-feedback-error";
+      status.textContent = (err && err.message) || "Échec de l'envoi.";
+    }).then(function () {
+      panel._snSending = false;
+      refreshSendState(panel);
+    });
+  }
+
+  // Affiche le panneau pour une génération (options.feedback de content.js),
+  // pré-rempli si l'agent a déjà donné son avis ; le masque sinon.
+  function showFeedback(refs, fbOptions) {
+    var panel = refs.feedback;
+    if (!panel) return;
+    if (!fbOptions || typeof fbOptions.onSubmit !== "function") {
+      hideFeedback(refs);
+      return;
+    }
+    panel._snOptions = fbOptions;
+    var prev = fbOptions.previous;
+    setRating(panel, prev ? prev.rating : null);
+    panel.querySelector(".sn-ai-feedback-time").value =
+      prev && typeof prev.timeSavedMin === "number" ? String(prev.timeSavedMin) : "";
+    panel.querySelector(".sn-ai-feedback-comment").value = (prev && prev.comment) || "";
+    panel._snSent = !!prev;
+    panel._snDirty = false;
+    panel._snSending = false;
+    var status = panel.querySelector(".sn-ai-feedback-status");
+    status.className = "sn-ai-feedback-status";
+    status.textContent = prev ? "Retour déjà envoyé — vous pouvez le modifier." : "";
+    panel.querySelector(".sn-ai-feedback-send").textContent = prev ? "Modifier le retour" : "Envoyer";
+    panel.style.display = "";
+    refreshSendState(panel);
+  }
+
+  function hideFeedback(refs) {
+    if (refs.feedback) {
+      refs.feedback.style.display = "none";
+      refs.feedback._snOptions = null;
+    }
   }
 
   // --- Bulle de raisonnement ---
@@ -332,6 +516,7 @@
     // Réponse vide apres une longue reflexion : la bulle reste, figée. C'est
     // précisément le cas où le raisonnement explique ce qui s'est passé.
     sealReasoning(refs);
+    hideFeedback(refs);
     refs.body.innerHTML = '<p class="sn-ai-proposition-placeholder">' +
       "Cliquez sur <strong>Générer</strong> pour proposer une réponse à partir des documents du référentiel." +
       "</p>";
@@ -357,6 +542,7 @@
     // afficher « en cours… » indéfiniment. Elle reste consultable — c'est
     // souvent là que se lit la raison de l'échec.
     sealReasoning(refs);
+    hideFeedback(refs);
     refs.body.innerHTML = '<p class="sn-ai-proposition-error">' +
       "Erreur : " + (message || "Impossible de générer la proposition.") +
       "</p>";
@@ -380,6 +566,7 @@
 
     refs.body._snSources = sources;
     refs.body.innerHTML = renderMarkdown(injectCitationPlaceholders(text, sources));
+    showFeedback(refs, options && options.feedback);
 
     // Sources list at the bottom of the body for quick scan
     if (sources.length > 0) {
@@ -519,6 +706,7 @@
     refs.body.innerHTML = "";
     if (refs.log) { refs.log.textContent = ""; refs.log.style.display = "none"; }
     resetReasoning(refs);
+    hideFeedback(refs);
     refs.generateBtn.disabled = true;
     refs.generateBtn.classList.add("sn-ai-loading");
     refs.generateBtn.innerHTML = SPINNER_SVG + '<span class="sn-ai-btn-label">Génération…</span>';
