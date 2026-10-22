@@ -8,9 +8,13 @@
   var API_LIBRARY = "epfl_website_v2"; // depuis le 09.09.2026 ("large_campus2" = ancien nom, alias serveur)
   // Modele UNIQUE (06.10.2026), aligne sur DEFAULT_MODEL dans background.js.
   // Envoye tel quel, SANS lire le choix stocke : un ancien choix (Qwen3.6,
-  // Kimi) ne doit pas survivre a la mise a jour. Le seul reglage offert a
-  // l'agent est le niveau de reflexion (`reasoning`, interrupteur du popup).
+  // Kimi) ne doit pas survivre a la mise a jour.
   var GLM_MODEL = "zai-org/GLM-5.3-Flash";
+  // Reflexion TOUJOURS rapide depuis le 22.10.2026 : l'interrupteur
+  // « Reflexion approfondie » du popup est retire. Constante, et non lecture du
+  // stockage : un agent qui l'avait active ne doit pas rester en "full".
+  // Mesures (background.js) : `low` 1er mot ~8 s, `full` ~41 s a 50 usagers.
+  var REASONING = "low";
   // Recherche : top_k 10 et rerank actif, NON reglables (07.10.2026), comme
   // Personal RAG (DPO-Agent, extension/src/state/config.ts, v9 ; et
   // api/epflHybrid.ts). 10 est la valeur retenue par le banc ServiceNow du
@@ -21,7 +25,6 @@
   var TOP_K = 10;
   var RERANK = true;
   var DEFAULTS = {
-    reasoning: "low",
     indexKey: "",
   };
 
@@ -141,7 +144,7 @@
           previous_messages: context.previous_messages,
           library: API_LIBRARY,
           model: GLM_MODEL,
-          reasoning: settings.reasoning,
+          reasoning: REASONING,
           top_k: TOP_K,
           temperature: 0.3,
           rerank: RERANK,
@@ -321,7 +324,7 @@
           previous_messages: context.previous_messages, // écrasé côté backend via l'API journal
           library: API_LIBRARY,
           model: GLM_MODEL,
-          reasoning: settings.reasoning,
+          reasoning: REASONING,
           top_k: TOP_K,
           temperature: 0.3,
           rerank: RERANK,

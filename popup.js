@@ -1,24 +1,27 @@
 // popup.js — Manages plugin settings via chrome.storage
 
-// Doit rester aligne sur les DEFAULTS de content.js. Plus de choix de modele
-// depuis le 06.10.2026 (GLM-5.3-Flash unique) : l'agent choisit le niveau de
-// reflexion -- "low" par defaut, "full" quand l'interrupteur est active.
-// top_k et rerank ne sont plus reglables (07.10.2026), cf. TOP_K / RERANK dans
-// background.js.
+// Plus aucun reglage de generation : modele unique GLM-5.3-Flash (06.10.2026),
+// top_k / rerank fixes (07.10.2026), reflexion toujours rapide (22.10.2026),
+// cf. content.js. Reste le contexte d'actualite.
 var DEFAULTS = {
-  reasoning: "low",
   additionalContext: "",
 };
 
-var reasoningToggle = document.getElementById("reasoning-toggle");
+// Seul compte qui voit les boutons de debug (jeton en console, copie du JWT).
+// Simple masquage d'interface : le jeton reste dans chrome.storage de chacun.
+var DEBUG_ACCOUNT = "yannick.pezeu@epfl.ch";
+
 var additionalContextInput = document.getElementById("additional-context-input");
 var authBtn = document.getElementById("auth-btn");
 var authUser = document.getElementById("auth-user");
 var authError = document.getElementById("auth-error");
+var authDebug = document.getElementById("auth-debug");
 
 var signedIn = false;
 
 function renderAuth(user) {
+  var email = (user && user.email ? user.email : "").trim().toLowerCase();
+  authDebug.style.display = email === DEBUG_ACCOUNT ? "flex" : "none";
   if (user && (user.email || user.name)) {
     signedIn = true;
     authUser.textContent = user.email || user.name;
@@ -102,15 +105,10 @@ authCopyBtn.addEventListener("click", function () {
 
 // Load saved settings
 chrome.storage.local.get(DEFAULTS, function (data) {
-  reasoningToggle.checked = data.reasoning === "full";
   additionalContextInput.value = data.additionalContext;
 });
 
 // Save on change
-reasoningToggle.addEventListener("change", function () {
-  chrome.storage.local.set({ reasoning: reasoningToggle.checked ? "full" : "low" });
-});
-
 additionalContextInput.addEventListener("input", function () {
   chrome.storage.local.set({ additionalContext: additionalContextInput.value });
 });

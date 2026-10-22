@@ -16,9 +16,9 @@ var API_KEY_DEFAULT = "";
 // gardé pour le champ `library_used`/logs côté backend.
 var API_LIBRARY = "servicenow_obo";
 
-// MODELE UNIQUE depuis le 06.10.2026 : GLM-5.3-Flash, avec un interrupteur
-// Reflexion (`reasoning` : "low" par defaut, "full" sur demande) -- comme
-// Personal RAG (DPO-Agent) depuis le 22-24.09. Doit rester aligne avec
+// MODELE UNIQUE depuis le 06.10.2026 : GLM-5.3-Flash. Reflexion toujours
+// rapide (`reasoning: "low"`) depuis le 22.10.2026 : l'interrupteur "full" du
+// popup est retire (cf. REASONING dans content.js). Doit rester aligne avec
 // GLM_MODEL dans content.js.
 //
 // Mesures, 264 tickets ServiceNow, grille ancree, juge Kimi-K2.7 (epfl-scraper,
@@ -74,6 +74,9 @@ chrome.runtime.onInstalled.addListener(function () {
   // Precalcul retire le 07.10.2026 (groupe d'affectation, alarme 15 min,
   // declenchement a la navigation) : ses cles ne servent plus.
   chrome.storage.local.remove(["assignmentGroup", "snGckTimestamp"]);
+  // Interrupteur « Reflexion approfondie » retire le 22.10.2026 (toujours
+  // `low`, cf. REASONING dans content.js).
+  chrome.storage.local.remove("reasoning");
   chrome.storage.local.get({ model: "" }, function (data) {
     if (data.model && RETIRED_MODELS.indexOf(data.model) !== -1) {
       chrome.storage.local.set({ model: DEFAULT_MODEL }, function () {

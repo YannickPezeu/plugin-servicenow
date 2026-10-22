@@ -79,59 +79,6 @@
       border-radius: 3px;
       background-color: #fff;
     }
-    .toggle-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-top: 8px;
-    }
-    .toggle-row label {
-      font-size: 12px;
-      font-weight: 600;
-      color: #444;
-      margin: 0;
-    }
-    .toggle-row .sublabel {
-      font-size: 10px;
-      font-weight: 400;
-      color: #888;
-    }
-    .switch {
-      position: relative;
-      width: 36px;
-      height: 20px;
-      flex-shrink: 0;
-    }
-    .switch input {
-      opacity: 0;
-      width: 0;
-      height: 0;
-    }
-    .slider {
-      position: absolute;
-      inset: 0;
-      background-color: #ccc;
-      border-radius: 20px;
-      cursor: pointer;
-      transition: background-color 0.2s;
-    }
-    .slider::before {
-      content: "";
-      position: absolute;
-      width: 14px;
-      height: 14px;
-      left: 3px;
-      bottom: 3px;
-      background-color: #fff;
-      border-radius: 50%;
-      transition: transform 0.2s;
-    }
-    .switch input:checked + .slider {
-      background-color: #4a6785;
-    }
-    .switch input:checked + .slider::before {
-      transform: translateX(16px);
-    }
     .auth-section {
       display: flex;
       align-items: center;
@@ -202,19 +149,10 @@
     <button id="auth-btn" class="auth-btn primary">Se connecter</button>
   </div>
   <div id="auth-error" class="auth-error"></div>
-  <div style="display:flex; gap:6px; margin-bottom:8px;">
+  <!-- Outils de debug : affichés par popup.js pour le seul compte DEBUG_ACCOUNT. -->
+  <div id="auth-debug" style="display:none; gap:6px; margin-bottom:8px;">
     <button id="auth-dump-btn" class="auth-btn" style="flex:1;">Voir token (console)</button>
     <button id="auth-copy-btn" class="auth-btn" style="flex:1;">Copier JWT</button>
-  </div>
-  <div class="toggle-row">
-    <div>
-      <label>Réflexion approfondie</label>
-      <div class="sublabel">GLM-5.3-Flash. Activée : meilleure réponse, mais premier mot plus tardif</div>
-    </div>
-    <label class="switch">
-      <input type="checkbox" id="reasoning-toggle">
-      <span class="slider"></span>
-    </label>
   </div>
   <hr>
   <div class="config-section">
